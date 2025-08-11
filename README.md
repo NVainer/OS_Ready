@@ -17,3 +17,13 @@ OR
 ```bash
 wget -O F https://raw.githubusercontent.com/NVainer/Production/main/Fast && chmod +x ./Fast && ./Fast
 ```
+
+<br><br>
+
+# 🌀 For New Ubuntu Users  
+1️⃣ Press **CTRL + ALT + T** to open the terminal  
+2️⃣ Paste the one-liner with **CTRL + SHIFT + V**  
+3️⃣ Hit **ENTER** and let the magic happen
+
+<img width="800" height="380" alt="Screenshot 2025-08-11 121333" src="https://github.com/user-attachments/assets/2458b811-daab-401c-8840-5a9df0022b18" />
+ 
