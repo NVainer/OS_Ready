@@ -66,6 +66,14 @@ $script:OfficeUrl     = 'https://officecdn.microsoft.com/db/492350f6-3a01-4f97-b
 $script:PwshExe       = $null
 $script:LogFile       = $null
 
+# Start-menu folder pins shown next to the power button (step 11). VisiblePlaces is an
+# opaque sequence of 16-byte "place" GUIDs hardcoded in the Start menu - the bytes are
+# not documented, so CAPTURE them from a machine where you enabled the folders you want:
+#   Settings > Personalization > Start > Folders  ->  tick Explorer/Documents/Downloads/etc,
+#   then run this and paste the hex string below (empty = leave Start folders unchanged):
+#   ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Start' VisiblePlaces).VisiblePlaces | ForEach-Object { $_.ToString('X2') }) -join ''
+$script:StartFoldersHex = ''
+
 try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $script:LogFile = Join-Path $env:USERPROFILE "Power_Windows_$stamp.log"
@@ -631,6 +639,131 @@ function Disable-StartupApps {
 }
 
 # =============================================================================
+#  10-16. Personalization
+#  NOTE: these write per-user (HKCU) UI settings, so run the script as the same
+#  user whose desktop you are setting up. Most need an Explorer restart to show.
+# =============================================================================
+
+# --- 10. Dark mode -----------------------------------------------------------
+function Set-DarkMode {
+    if (-not (Confirm-Action "Enable dark mode (Windows + apps)?")) { Write-Log "Left theme unchanged." WARN; return }
+    try {
+        $p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+        if (-not (Test-Path $p)) { New-Item $p -Force | Out-Null }
+        New-ItemProperty $p 'AppsUseLightTheme'   -Value 0 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty $p 'SystemUsesLightTheme' -Value 0 -PropertyType DWord -Force | Out-Null
+        Write-Log "Dark mode enabled." OK
+    } catch { Write-Log "Failed to enable dark mode: $($_.Exception.Message)" ERR }
+}
+
+# --- 11. Start menu folder pins (next to power button) -----------------------
+function Set-StartFolders {
+    if ([string]::IsNullOrWhiteSpace($script:StartFoldersHex)) {
+        Write-Log "Start folder pins not configured (VisiblePlaces hex is empty) - skipping. See the capture note near the top of this script." WARN
+        return
+    }
+    if (-not (Confirm-Action "Set the Start menu folder pins (next to the power button)?")) { Write-Log "Left Start folders unchanged." WARN; return }
+    try {
+        $hex = ($script:StartFoldersHex -replace '[^0-9A-Fa-f]', '')
+        if ($hex.Length -eq 0 -or $hex.Length % 32 -ne 0) {
+            Write-Log "VisiblePlaces hex is not a whole number of 16-byte GUIDs - skipping to avoid a broken Start menu." ERR
+            return
+        }
+        $bytes = New-Object 'System.Collections.Generic.List[byte]'
+        for ($i = 0; $i -lt $hex.Length; $i += 2) { $bytes.Add([Convert]::ToByte($hex.Substring($i, 2), 16)) }
+        $startKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Start'
+        if (-not (Test-Path $startKey)) { New-Item $startKey -Force | Out-Null }
+        reg export 'HKCU\Software\Microsoft\Windows\CurrentVersion\Start' "$env:USERPROFILE\Power_Windows_Start_backup.reg" /y 2>$null | Out-Null
+        New-ItemProperty -Path $startKey -Name 'VisiblePlaces' -Value ([byte[]]$bytes.ToArray()) -PropertyType Binary -Force | Out-Null
+        Write-Log "Start folder pins set ($([int]($bytes.Count / 16)) folders). Backup: Power_Windows_Start_backup.reg" OK
+    } catch { Write-Log "Failed to set Start folders: $($_.Exception.Message)" ERR }
+}
+
+# --- 12. Remove the Widgets button (weather/news, taskbar left) ---------------
+function Disable-WidgetsButton {
+    if (-not (Confirm-Action "Remove the Widgets (weather & news) button from the taskbar?")) { return }
+    try {
+        Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Force
+        # Also block it via policy so it stays gone.
+        $pol = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'
+        if (-not (Test-Path $pol)) { New-Item $pol -Force | Out-Null }
+        New-ItemProperty $pol 'AllowNewsAndInterests' -Value 0 -PropertyType DWord -Force | Out-Null
+        Write-Log "Widgets button removed." OK
+    } catch { Write-Log "Failed to remove Widgets: $($_.Exception.Message)" ERR }
+}
+
+# --- 13. Clean the taskbar: Task View, Search, Chat, Copilot, app pins --------
+function Clear-TaskbarPins {
+    if (-not (Confirm-Action "Remove all taskbar buttons except Start (Task View, Search, Chat, Copilot, app pins)?")) { return }
+    $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    try {
+        Set-ItemProperty $adv -Name 'ShowTaskViewButton' -Value 0 -Force
+        Set-ItemProperty $adv -Name 'TaskbarMn'          -Value 0 -Force   # Chat
+        New-ItemProperty $adv -Name 'ShowCopilotButton'  -Value 0 -PropertyType DWord -Force | Out-Null
+        Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Search' -Name 'SearchboxTaskbarMode' -Value 0 -Force
+        Write-Log "Hid Task View, Search, Chat and Copilot buttons." OK
+    } catch { Write-Log "Failed to hide taskbar buttons: $($_.Exception.Message)" WARN }
+    # App pins (Edge/Store/etc.) - best effort; Win11 pin storage varies by build.
+    try {
+        $tb = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband'
+        if (Test-Path $tb) {
+            reg export 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband' "$env:USERPROFILE\Power_Windows_Taskband_backup.reg" /y 2>$null | Out-Null
+            Remove-ItemProperty $tb -Name 'Favorites'        -ErrorAction SilentlyContinue
+            Remove-ItemProperty $tb -Name 'FavoritesResolve' -ErrorAction SilentlyContinue
+            Write-Log "Cleared pinned taskbar apps (backup: Power_Windows_Taskband_backup.reg). Some pins may need manual unpin on 25H2." OK
+        }
+    } catch { Write-Log "Could not clear app pins: $($_.Exception.Message)" WARN }
+}
+
+# --- 14. Never sleep / screen off / hibernate --------------------------------
+function Set-NeverSleep {
+    if (-not (Confirm-Action "Set screen, sleep and hibernate timeouts to Never?")) { return }
+    try {
+        foreach ($t in 'monitor-timeout-ac', 'monitor-timeout-dc', 'standby-timeout-ac', 'standby-timeout-dc', 'hibernate-timeout-ac', 'hibernate-timeout-dc') {
+            powercfg /change $t 0 | Out-Null
+        }
+        Write-Log "Screen, sleep and hibernate set to Never (plugged in and on battery)." OK
+    } catch { Write-Log "powercfg failed: $($_.Exception.Message)" ERR }
+}
+
+# --- 15. Turn off Start / File Explorer recommendations ----------------------
+function Disable-StartRecommendations {
+    if (-not (Confirm-Action "Turn off recommended/recent files in Start, Explorer and Jump Lists, plus Start tips?")) { return }
+    try {
+        $adv = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+        New-ItemProperty $adv 'Start_TrackDocs'           -Value 0 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty $adv 'Start_IrisRecommendations' -Value 0 -PropertyType DWord -Force | Out-Null
+        Write-Log "Start recommendations and recent-file tracking turned off." OK
+    } catch { Write-Log "Failed to turn off recommendations: $($_.Exception.Message)" ERR }
+}
+
+# --- 16. Do Not Disturb ------------------------------------------------------
+function Set-DoNotDisturb {
+    if (-not (Confirm-Action "Turn on Do Not Disturb (silence notification banners)?")) { return }
+    # Windows 11's literal DND switch is an opaque CloudStore blob that scripts can't set
+    # reliably. The stable equivalent is turning off toast banners, which we do here.
+    try {
+        $pn = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\PushNotifications'
+        if (-not (Test-Path $pn)) { New-Item $pn -Force | Out-Null }
+        New-ItemProperty $pn 'ToastEnabled' -Value 0 -PropertyType DWord -Force | Out-Null
+        $ns = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Notifications\Settings'
+        if (-not (Test-Path $ns)) { New-Item $ns -Force | Out-Null }
+        New-ItemProperty $ns 'NOC_GLOBAL_SETTING_TOASTS_ENABLED' -Value 0 -PropertyType DWord -Force | Out-Null
+        Write-Log "Do Not Disturb on (notification banners silenced)." OK
+    } catch { Write-Log "Failed to set Do Not Disturb: $($_.Exception.Message)" ERR }
+}
+
+# --- Restart Explorer so taskbar/Start changes take effect -------------------
+function Restart-Explorer {
+    try {
+        Get-Process -Name explorer -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+        if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) { Start-Process explorer.exe }
+        Write-Log "Restarted Explorer to apply taskbar/Start changes." OK
+    } catch { Write-Log "Could not restart Explorer: $($_.Exception.Message)" WARN }
+}
+
+# =============================================================================
 #  Main
 # =============================================================================
 Write-Host ""
@@ -660,6 +793,16 @@ Invoke-Step "6. Install apps (winget)"      { Install-Apps }
 Invoke-Step "7. Default terminal + profile" { Set-DefaultTerminal }
 Invoke-Step "8. Configure PowerShell 7"     { Set-PowerShell7Environment }
 Invoke-Step "9. Turn off startup apps"      { Disable-StartupApps }
+Invoke-Step "10. Dark mode"                 { Set-DarkMode }
+Invoke-Step "11. Start folder pins"         { Set-StartFolders }
+Invoke-Step "12. Remove Widgets button"     { Disable-WidgetsButton }
+Invoke-Step "13. Clean taskbar"             { Clear-TaskbarPins }
+Invoke-Step "14. Never sleep/screen/hibernate" { Set-NeverSleep }
+Invoke-Step "15. Start recommendations off" { Disable-StartRecommendations }
+Invoke-Step "16. Do Not Disturb"            { Set-DoNotDisturb }
+
+# Apply taskbar/Start tweaks (steps 10-13, 15) by restarting Explorer.
+if (Confirm-Action "Restart Explorer now to apply the taskbar/Start changes?") { Restart-Explorer }
 
 # Reconcile the background Office download last.
 Complete-OfficeDownload
@@ -667,5 +810,8 @@ Complete-OfficeDownload
 Write-Section "Done"
 Write-Log "Power_Windows finished." OK
 Write-Log "Recommended: restart Windows Terminal (font/profile) and sign out/in or reboot (language)." INFO
+if ([string]::IsNullOrWhiteSpace($script:StartFoldersHex)) {
+    Write-Log "Start folder pins (step 11) were skipped - set `$script:StartFoldersHex to enable them (see the capture note at the top)." INFO
+}
 if ($script:LogFile) { Write-Log "Full log: $($script:LogFile)" INFO }
 try { Stop-Transcript | Out-Null } catch { }

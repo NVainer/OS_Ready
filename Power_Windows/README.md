@@ -29,10 +29,32 @@ irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_
 7. **Windows Terminal** → default terminal application, default profile = PowerShell 7.
 8. **Configures PowerShell 7** — oh-my-posh, Meslo Nerd Font, PSReadLine / posh-git / Terminal-Icons, and the custom profile + theme.
 9. **Turns off all startup apps** (reversible from Task Manager).
+10. **Dark mode** for Windows and apps.
+11. **Start folder pins** next to the power button (see note below).
+12. **Removes the Widgets** (weather & news) button from the taskbar.
+13. **Cleans the taskbar** — hides Task View, Search, Chat, Copilot and clears app pins (only Start remains).
+14. **Never** sleep / screen-off / hibernate (plugged in and on battery).
+15. **Turns off** Start/Explorer recommendations, recent files, Jump List items, and Start tips.
+16. **Do Not Disturb** on (silences notification banners).
 
 ## Notes
 
 - Requires an internet connection and `winget` (App Installer, ships with Win 11).
 - A full log is written to `%USERPROFILE%\Power_Windows_<timestamp>.log`.
+- Steps 10-16 write per-user (HKCU) settings — run as the user whose desktop you're setting up. Explorer is restarted at the end to apply taskbar/Start changes.
 - Restart Windows Terminal (font/profile) and sign out/in or reboot (language) after it finishes.
 - The Office image is downloaded only — install it yourself afterwards.
+
+### Step 11 — Start folder pins (needs one capture)
+
+The folders shown next to the power button are stored in an **undocumented binary blob** (`VisiblePlaces`), unique to each combination of folders. To set yours exactly, enable them once on any machine via **Settings → Personalization → Start → Folders**, then capture the bytes:
+
+```powershell
+((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Start' VisiblePlaces).VisiblePlaces | ForEach-Object { $_.ToString('X2') }) -join ''
+```
+
+Paste the resulting hex string into `$script:StartFoldersHex` near the top of the script. Left empty, step 11 is skipped (no risk of a broken Start menu).
+
+### Step 16 — Do Not Disturb
+
+Windows 11's literal "Do not disturb" toggle is an opaque CloudStore blob that scripts can't set reliably, so the script achieves the same effect by disabling toast notification banners.
