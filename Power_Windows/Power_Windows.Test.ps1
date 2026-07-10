@@ -44,23 +44,34 @@ param(
 )
 
 # =============================================================================
-#  1. Self-elevation  (relaunch as Administrator, keep 5.1 host, pass -Auto)
+#  1. Self-elevation  (works from a file OR straight from the web via irm|iex)
 # =============================================================================
+$PowerWindowsUrl = 'https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.Test.ps1'
+
 $currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
     [Security.Principal.WindowsIdentity]::GetCurrent())
 if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    if (-not $PSCommandPath) {
-        Write-Host "[x] This script must be saved to a file and run as Administrator." -ForegroundColor Red
-        Write-Host "    Download it first, then run:  .\Power_Windows.ps1" -ForegroundColor Red
-        return
+    # Relaunch elevated from a file. When run from the web (no file on disk), fetch
+    # ourselves to TEMP first so there is a file to hand to -File. Running elevated
+    # with -ExecutionPolicy Bypass is what lets this work on a fresh, Restricted box.
+    $scriptPath = $PSCommandPath
+    if (-not $scriptPath) {
+        $scriptPath = Join-Path $env:TEMP 'Power_Windows.Test.ps1'
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Write-Host "[*] Fetching Power_Windows to $scriptPath ..." -ForegroundColor Cyan
+            Invoke-RestMethod -Uri $PowerWindowsUrl -OutFile $scriptPath -ErrorAction Stop
+        } catch {
+            Write-Host "[x] Could not download the script: $($_.Exception.Message)" -ForegroundColor Red
+            return
+        }
     }
     Write-Host "[*] Elevating to Administrator..." -ForegroundColor Cyan
-    $hostExe = (Get-Process -Id $PID).Path
-    $argList = @('-NoExit', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath))
+    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', ('"{0}"' -f $scriptPath))
     if ($Auto)   { $argList += '-Auto' }
     if ($DryRun) { $argList += '-DryRun' }
     try {
-        Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $argList
+        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList
     } catch {
         Write-Host "[x] Elevation was cancelled or failed. Aborting." -ForegroundColor Red
     }

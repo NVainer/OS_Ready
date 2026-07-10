@@ -6,17 +6,17 @@ Every action asks **Y/N** first (answer **A** during app installs to accept the 
 
 ## One-liner
 
-Open **Windows PowerShell** and run — the script self-elevates to Administrator. The
-`-ExecutionPolicy Bypass` launch is required because a fresh Windows blocks scripts by default:
+Open **Windows PowerShell** and paste — it runs from memory (no execution-policy prompt),
+fetches itself to TEMP, and self-elevates to Administrator:
 
 ```powershell
-irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.ps1 -OutFile "$env:TEMP\Power_Windows.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Power_Windows.ps1"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.ps1)))
 ```
 
 Unattended (accept every prompt):
 
 ```powershell
-irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.ps1 -OutFile "$env:TEMP\Power_Windows.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Power_Windows.ps1" -Auto
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.ps1))) -Auto
 ```
 
 ## Testing — `Power_Windows.Test.ps1`
@@ -27,15 +27,15 @@ probes the environment, and writes a consolidated report you can send back.
 
 ```powershell
 # Safe DRY RUN — walks the whole flow and changes nothing (fine on your main PC):
-irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.Test.ps1 -OutFile "$env:TEMP\Power_Windows.Test.ps1"; powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Power_Windows.Test.ps1" -DryRun
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.Test.ps1))) -DryRun
 
 # Real run (use a VM or a machine you actually intend to set up):
-powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Power_Windows.Test.ps1"
+& ([scriptblock]::Create((irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.Test.ps1)))
 ```
 
-> A fresh Windows blocks `.ps1` files (`running scripts is disabled on this system`), so launch
-> with `powershell -ExecutionPolicy Bypass -File …` rather than `& "…"`. It only affects that one
-> process. The script's own self-elevation already carries the bypass through the UAC step.
+> This runs from memory, so a fresh Windows' `Restricted` policy never blocks it (execution
+> policy only gates `.ps1` **files**). The script fetches itself to TEMP and self-elevates with
+> `-ExecutionPolicy Bypass`, so the whole thing is a single paste.
 
 When it finishes, send back **`%USERPROFILE%\Power_Windows_TestReport_<timestamp>.txt`**
 (and the `Power_Windows_TEST_<timestamp>.log` transcript if asked). `-DryRun` proves the
