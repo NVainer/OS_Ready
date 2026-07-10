@@ -48,25 +48,27 @@ harness — elevation, connectivity, environment probe, prompts, reporting — w
 3. **Activates Windows** via [Microsoft Activation Scripts](https://github.com/massgravel/Microsoft-Activation-Scripts) (HWID / permanent, unattended).
 4. **Downloads Office 2024** (`ProPlus2024Retail.img`) to `Downloads\` in the background.
 5. **Sets languages** — English (primary) + Hebrew (secondary input).
-6. **Installs apps** with `winget` (per-app prompt, or `A` for all): VC++ Redist, Python 3.14, Brave, Chrome, PowerShell 7, PowerToys, VirtualBox, VS Code, KeePassXC, Monitorian, Git, VLC.
+6. **Installs apps** with `winget` (per-app prompt, or `A` for all): VC++ Redist, Python 3.14, Brave, Chrome, PowerShell 7, PowerToys, VirtualBox, VS Code, KeePassXC, Monitorian, Git, VLC. (Closes the PowerToys welcome window it pops open.)
 7. **Windows Terminal** → default terminal application, default profile = PowerShell 7.
 8. **Configures PowerShell 7** — oh-my-posh, Meslo Nerd Font, PSReadLine / posh-git / Terminal-Icons, and the custom profile + theme.
 9. **Turns off all startup apps** (reversible from Task Manager).
-10. **Dark mode** for Windows and apps.
+10. **Windows (dark) theme** — applies the built-in dark theme (dark mode **and** the matching dark wallpaper).
 11. **Start folder pins** next to the power button (see note below).
 12. **Removes the Widgets** (weather & news) button from the taskbar.
 13. **Cleans the taskbar** — hides Task View, Search, Chat, Copilot and clears app pins (only Start remains).
 14. **Never** sleep / screen-off / hibernate (plugged in and on battery).
 15. **Turns off** Start/Explorer recommendations, recent files, Jump List items, and Start tips.
 16. **Do Not Disturb** on (silences notification banners).
+17. **Installs & activates Office** — waits for the download, mounts the image, runs `Setup.exe`, waits for it to finish, unmounts, then activates with MAS Ohook.
 
 ## Notes
 
 - Requires an internet connection and `winget` (App Installer, ships with Win 11).
 - A full log is written to `%USERPROFILE%\Power_Windows_<timestamp>.log`.
 - Steps 10-16 write per-user (HKCU) settings — run as the user whose desktop you're setting up. Explorer is restarted at the end to apply taskbar/Start changes.
+- **Elevation** opens the admin session as a **Windows Terminal tab** (in a dedicated `Power_Windows` window). Windows' security model keeps elevated tabs out of an unelevated window, so it's a separate elevated window that repeat runs share as tabs — not a tab inside your original window.
 - Restart Windows Terminal (font/profile) and sign out/in or reboot (language) after it finishes.
-- The Office image is downloaded only — install it yourself afterwards.
+- **Office** is downloaded during the run and installed at the end (step 17). The install detects completion heuristically (all core apps present + the click-to-run client exited); if it can't confirm within 60 min it leaves the image mounted so you can finish manually.
 
 ### Step 11 — Start folder pins (needs one capture)
 

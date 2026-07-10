@@ -56,12 +56,24 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
         }
     }
     Write-Host "[*] Elevating to Administrator..." -ForegroundColor Cyan
-    $argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-NoExit', '-File', ('"{0}"' -f $scriptPath))
-    if ($Auto) { $argList += '-Auto' }
-    try {
-        Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $argList
-    } catch {
-        Write-Host "[x] Elevation was cancelled or failed. Aborting." -ForegroundColor Red
+    $psArgs = '-NoProfile -ExecutionPolicy Bypass -NoExit -File "{0}"' -f $scriptPath
+    if ($Auto) { $psArgs += ' -Auto' }
+    # Prefer opening the elevated session as a Windows Terminal tab. Windows keeps
+    # elevated tabs in their own WT window (separate from an unelevated one), so this
+    # is a dedicated "Power_Windows" window that repeat runs share as tabs; it can't be
+    # merged into an unelevated window. Fall back to a standard elevated console.
+    $launched = $false
+    if (Get-Command wt.exe -ErrorAction SilentlyContinue) {
+        $wtArgs = '-w Power_Windows new-tab --title "Power_Windows (admin)" powershell.exe {0}' -f $psArgs
+        try { Start-Process -FilePath 'wt.exe' -Verb RunAs -ArgumentList $wtArgs -ErrorAction Stop; $launched = $true }
+        catch {
+            if ($_.Exception.Message -match 'cancel') { return }
+            Write-Host "[!] Windows Terminal launch failed; using a standard elevated window." -ForegroundColor Yellow
+        }
+    }
+    if (-not $launched) {
+        try { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
+        catch { Write-Host "[x] Elevation was cancelled or failed. Aborting." -ForegroundColor Red }
     }
     return
 }
@@ -252,6 +264,90 @@ function Complete-OfficeDownload {
     Remove-Job $job -Force -ErrorAction SilentlyContinue
 }
 
+# Wait until the Office click-to-run install is finished. Returns $true on completion.
+function Wait-OfficeInstall {
+    param([int]$TimeoutMinutes = 60)
+    Write-Log "Waiting for Office to finish installing (up to $TimeoutMinutes min)..."
+    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    $roots = @(
+        (Join-Path $env:ProgramFiles 'Microsoft Office\root\Office16'),
+        (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Office\root\Office16')
+    )
+    $core = @('WINWORD.EXE', 'EXCEL.EXE', 'POWERPNT.EXE', 'OUTLOOK.EXE')
+    $stable = 0
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 20
+        $office16 = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
+        $present = @()
+        if ($office16) { foreach ($a in $core) { if (Test-Path (Join-Path $office16 $a)) { $present += $a } } }
+        $c2r = Get-Process -Name 'OfficeC2RClient' -ErrorAction SilentlyContinue
+        if ($present.Count -eq $core.Count -and -not $c2r) {
+            $stable++
+            if ($stable -ge 2) { Write-Log "Office installation complete." OK; return $true }
+        } else {
+            $stable = 0
+        }
+    }
+    Write-Log "Timed out waiting for Office to finish (it may still be installing)." WARN
+    return $false
+}
+
+# Mount the downloaded Office image, run Setup, wait, unmount, then activate (Ohook).
+function Install-Office {
+    if (-not (Test-Path $script:OfficeDest)) {
+        Write-Log "Office image not found ($($script:OfficeDest)); nothing to install." WARN
+        return
+    }
+    if (-not (Confirm-Action "Install Office from the downloaded image now?")) {
+        Write-Log "Skipped Office install." WARN
+        return
+    }
+    $mounted = $false
+    $installed = $false
+    try {
+        Write-Log "Mounting $($script:OfficeDest)..."
+        Mount-DiskImage -ImagePath $script:OfficeDest -ErrorAction Stop | Out-Null
+        $mounted = $true
+        Start-Sleep -Seconds 3
+        $drive = (Get-DiskImage -ImagePath $script:OfficeDest | Get-Volume).DriveLetter
+        if (-not $drive) { Start-Sleep -Seconds 3; $drive = (Get-DiskImage -ImagePath $script:OfficeDest | Get-Volume).DriveLetter }
+        if (-not $drive) { throw "Could not determine the mounted drive letter." }
+        Write-Log "Mounted at ${drive}:" OK
+        $setup = Join-Path "${drive}:\" 'Setup.exe'
+        if (-not (Test-Path $setup)) {
+            $found = Get-ChildItem "${drive}:\" -Filter 'Setup*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { $setup = $found.FullName }
+        }
+        if (-not (Test-Path $setup)) { throw "Setup.exe not found on the mounted image." }
+        Write-Log "Launching Office setup: $setup"
+        Start-Process -FilePath $setup | Out-Null
+        $installed = Wait-OfficeInstall
+        if ($installed) { Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+    } catch {
+        Write-Log "Office install failed: $($_.Exception.Message)" ERR
+    } finally {
+        if ($mounted) {
+            if ($installed) {
+                try { Dismount-DiskImage -ImagePath $script:OfficeDest -ErrorAction Stop | Out-Null; Write-Log "Unmounted the Office image." OK }
+                catch { Write-Log "Could not unmount the image: $($_.Exception.Message)" WARN }
+            } else {
+                Write-Log "Leaving the image mounted (install not confirmed). Unmount it yourself once Office is in." WARN
+            }
+        }
+    }
+    if ($installed) {
+        if (Confirm-Action "Activate Office now (MAS Ohook)?") {
+            Write-Log "Running MAS Ohook (Office activation)..."
+            try {
+                & ([scriptblock]::Create((Invoke-RestMethod -Uri 'https://get.activated.win'))) /Ohook
+                Write-Log "Office activation routine finished." OK
+            } catch { Write-Log "Office activation failed: $($_.Exception.Message)" ERR }
+        }
+    } else {
+        Write-Log "Skipping Office activation (install did not confirm complete)." WARN
+    }
+}
+
 # =============================================================================
 #  5. Languages: English (primary) + Hebrew (secondary)
 # =============================================================================
@@ -280,6 +376,15 @@ function Set-Languages {
 # =============================================================================
 #  6. Install apps (winget)
 # =============================================================================
+function Close-PowerToysWindow {
+    # PowerToys pops its "Welcome" window open after install; close it during setup.
+    $pt = Get-Process -Name 'PowerToys*' -ErrorAction SilentlyContinue
+    if ($pt) {
+        $pt | Stop-Process -Force -ErrorAction SilentlyContinue
+        Write-Log "Closed the PowerToys welcome window." OK
+    }
+}
+
 function Install-Apps {
     if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
         Write-Log "winget (App Installer) not found - skipping app installs. Install 'App Installer' from the Store, then re-run." ERR
@@ -323,6 +428,7 @@ function Install-Apps {
     }
     Update-SessionPath
     $script:PwshExe = Get-PwshExe
+    Close-PowerToysWindow
 }
 
 # =============================================================================
@@ -657,14 +763,26 @@ function Disable-StartupApps {
 
 # --- 10. Dark mode -----------------------------------------------------------
 function Set-DarkMode {
-    if (-not (Confirm-Action "Enable dark mode (Windows + apps)?")) { Write-Log "Left theme unchanged." WARN; return }
+    if (-not (Confirm-Action "Apply the Windows (dark) theme (dark mode + matching wallpaper)?")) { Write-Log "Left theme unchanged." WARN; return }
     try {
+        # Dark toggles (also set by the theme; kept as a fallback if the theme is missing).
         $p = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
         if (-not (Test-Path $p)) { New-Item $p -Force | Out-Null }
-        New-ItemProperty $p 'AppsUseLightTheme'   -Value 0 -PropertyType DWord -Force | Out-Null
+        New-ItemProperty $p 'AppsUseLightTheme'    -Value 0 -PropertyType DWord -Force | Out-Null
         New-ItemProperty $p 'SystemUsesLightTheme' -Value 0 -PropertyType DWord -Force | Out-Null
-        Write-Log "Dark mode enabled." OK
-    } catch { Write-Log "Failed to enable dark mode: $($_.Exception.Message)" ERR }
+
+        # Apply the built-in "Windows (dark)" theme so the wallpaper matches the selection.
+        $darkTheme = Join-Path $env:SystemRoot 'Resources\Themes\dark.theme'
+        if (Test-Path $darkTheme) {
+            Start-Process $darkTheme | Out-Null
+            Start-Sleep -Seconds 4
+            # Applying a .theme opens the Settings app; close it.
+            Get-Process -Name 'SystemSettings' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Write-Log "Applied Windows (dark) theme (dark mode + wallpaper)." OK
+        } else {
+            Write-Log "dark.theme not found; applied dark mode via registry only." WARN
+        }
+    } catch { Write-Log "Failed to apply dark theme: $($_.Exception.Message)" ERR }
 }
 
 # --- 11. Start menu folder pins (next to power button) -----------------------
@@ -695,10 +813,6 @@ function Disable-WidgetsButton {
     if (-not (Confirm-Action "Remove the Widgets (weather & news) button from the taskbar?")) { return }
     try {
         Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Force
-        # Also block it via policy so it stays gone.
-        $pol = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'
-        if (-not (Test-Path $pol)) { New-Item $pol -Force | Out-Null }
-        New-ItemProperty $pol 'AllowNewsAndInterests' -Value 0 -PropertyType DWord -Force | Out-Null
         Write-Log "Widgets button removed." OK
     } catch { Write-Log "Failed to remove Widgets: $($_.Exception.Message)" ERR }
 }
@@ -815,8 +929,9 @@ Invoke-Step "16. Do Not Disturb"            { Set-DoNotDisturb }
 # Apply taskbar/Start tweaks (steps 10-13, 15) by restarting Explorer.
 if (Confirm-Action "Restart Explorer now to apply the taskbar/Start changes?") { Restart-Explorer }
 
-# Reconcile the background Office download last.
+# Reconcile the background Office download, then mount / install / activate Office.
 Complete-OfficeDownload
+Invoke-Step "17. Install + activate Office" { Install-Office }
 
 Write-Section "Done"
 Write-Log "Power_Windows finished." OK
