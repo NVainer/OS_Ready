@@ -18,6 +18,24 @@ Unattended (accept every prompt):
 irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.ps1 -OutFile "$env:TEMP\Power_Windows.ps1"; & "$env:TEMP\Power_Windows.ps1" -Auto
 ```
 
+## Testing — `Power_Windows.Test.ps1`
+
+A verbose, instrumented copy for trial runs. It timestamps every line, records each step's
+**PASS / FAIL / timing**, captures full error detail (including non-terminating errors),
+probes the environment, and writes a consolidated report you can send back.
+
+```powershell
+# Safe DRY RUN — walks the whole flow and changes nothing (fine on your main PC):
+irm https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Windows/Power_Windows.Test.ps1 -OutFile "$env:TEMP\Power_Windows.Test.ps1"; & "$env:TEMP\Power_Windows.Test.ps1" -DryRun
+
+# Real run (use a VM or a machine you actually intend to set up):
+& "$env:TEMP\Power_Windows.Test.ps1"
+```
+
+When it finishes, send back **`%USERPROFILE%\Power_Windows_TestReport_<timestamp>.txt`**
+(and the `Power_Windows_TEST_<timestamp>.log` transcript if asked). `-DryRun` proves the
+harness — elevation, connectivity, environment probe, prompts, reporting — with zero side effects.
+
 ## What it does
 
 1. **Elevates** to an Administrator PowerShell (relaunches itself).
