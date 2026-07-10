@@ -1,0 +1,671 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+    Power_Windows - opinionated post-install setup for a fresh Windows 11 (25H2+).
+
+.DESCRIPTION
+    One script to activate, install and configure a fresh Windows box.
+    Every action asks Y/N first (answer A during app installs to accept the rest),
+    unless you pass -Auto, which accepts everything.
+
+    Steps:
+      1. Self-elevate to an Administrator PowerShell
+      2. Verify internet connectivity (aborts if offline)
+      3. Activate Windows (Microsoft Activation Scripts - HWID/permanent)
+      4. Download Office 2024 image in the background
+      5. Set languages: English (primary) + Hebrew (secondary)
+      6. Install apps with winget (per-app prompt, or A for all)
+      7. Make Windows Terminal the default terminal + default profile = PowerShell 7
+      8. Configure PowerShell 7 (oh-my-posh, Meslo Nerd Font, modules, profile)
+      9. Turn off all startup apps
+
+.PARAMETER Auto
+    Accept every prompt automatically (unattended run).
+
+.EXAMPLE
+    .\Power_Windows.ps1
+.EXAMPLE
+    .\Power_Windows.ps1 -Auto
+#>
+[CmdletBinding()]
+param(
+    [switch]$Auto
+)
+
+# =============================================================================
+#  1. Self-elevation  (relaunch as Administrator, keep 5.1 host, pass -Auto)
+# =============================================================================
+$currentPrincipal = New-Object Security.Principal.WindowsPrincipal(
+    [Security.Principal.WindowsIdentity]::GetCurrent())
+if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    if (-not $PSCommandPath) {
+        Write-Host "[x] This script must be saved to a file and run as Administrator." -ForegroundColor Red
+        Write-Host "    Download it first, then run:  .\Power_Windows.ps1" -ForegroundColor Red
+        return
+    }
+    Write-Host "[*] Elevating to Administrator..." -ForegroundColor Cyan
+    $hostExe = (Get-Process -Id $PID).Path
+    $argList = @('-NoExit', '-ExecutionPolicy', 'Bypass', '-File', ('"{0}"' -f $PSCommandPath))
+    if ($Auto) { $argList += '-Auto' }
+    try {
+        Start-Process -FilePath $hostExe -Verb RunAs -ArgumentList $argList
+    } catch {
+        Write-Host "[x] Elevation was cancelled or failed. Aborting." -ForegroundColor Red
+    }
+    return
+}
+
+$ErrorActionPreference = 'Continue'
+
+# Mutable state
+$script:Auto          = [bool]$Auto
+$script:AssumeAllApps = $false
+$script:OfficeJob     = $null
+$script:OfficeDest    = Join-Path $env:USERPROFILE 'Downloads\ProPlus2024Retail.img'
+$script:OfficeUrl     = 'https://officecdn.microsoft.com/db/492350f6-3a01-4f97-b9c0-c7c6ddf67d60/media/en-us/ProPlus2024Retail.img'
+$script:PwshExe       = $null
+$script:LogFile       = $null
+
+try {
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $script:LogFile = Join-Path $env:USERPROFILE "Power_Windows_$stamp.log"
+    Start-Transcript -Path $script:LogFile -Append -ErrorAction Stop | Out-Null
+} catch { }
+
+# =============================================================================
+#  Helpers
+# =============================================================================
+function Write-Log {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [ValidateSet('INFO', 'OK', 'WARN', 'ERR')][string]$Level = 'INFO'
+    )
+    switch ($Level) {
+        'OK'   { Write-Host "[+] $Message" -ForegroundColor Green }
+        'WARN' { Write-Host "[!] $Message" -ForegroundColor Yellow }
+        'ERR'  { Write-Host "[x] $Message" -ForegroundColor Red }
+        default { Write-Host "[*] $Message" -ForegroundColor Cyan }
+    }
+}
+
+function Write-Section {
+    param([string]$Title)
+    Write-Host ""
+    Write-Host ("===  $Title  ===") -ForegroundColor Magenta
+}
+
+function Confirm-Action {
+    param(
+        [Parameter(Mandatory)][string]$Message,
+        [switch]$AllowAll
+    )
+    if ($script:Auto) { return $true }
+    if ($AllowAll -and $script:AssumeAllApps) { return $true }
+    while ($true) {
+        $suffix = if ($AllowAll) { '[Y]es / [N]o / [A]ll' } else { '[Y]es / [N]o' }
+        $resp = (Read-Host "$Message  $suffix").Trim().ToLower()
+        switch -Regex ($resp) {
+            '^(y|yes)$' { return $true }
+            '^(n|no|)$' { return $false }
+            '^(a|all)$' {
+                if ($AllowAll) { $script:AssumeAllApps = $true; return $true }
+                Write-Log "Please answer Y or N." WARN
+            }
+            default { Write-Log "Please answer Y, N$(if($AllowAll){' or A'})." WARN }
+        }
+    }
+}
+
+function Invoke-Step {
+    param([string]$Title, [scriptblock]$Action)
+    Write-Section $Title
+    try { & $Action }
+    catch { Write-Log "Step '$Title' failed: $($_.Exception.Message)" ERR }
+}
+
+function Update-SessionPath {
+    # Pull fresh Machine + User PATH so freshly-installed tools resolve this session.
+    $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
+    $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
+    $env:Path = (@($machine, $user) | Where-Object { $_ }) -join ';'
+}
+
+function Write-TextFileNoBom {
+    param([string]$Path, [string]$Content)
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::WriteAllText($Path, $Content, $enc)
+}
+
+function Get-PwshExe {
+    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($cmd) { return $cmd.Source }
+    foreach ($p in @(
+            "$env:ProgramFiles\PowerShell\7\pwsh.exe",
+            "${env:ProgramFiles(x86)}\PowerShell\7\pwsh.exe",
+            "$env:ProgramFiles\PowerShell\7-preview\pwsh.exe")) {
+        if ($p -and (Test-Path $p)) { return $p }
+    }
+    return $null
+}
+
+# =============================================================================
+#  2. Connectivity
+# =============================================================================
+function Test-Connectivity {
+    Write-Log "Checking internet connectivity..."
+    try {
+        if (Test-Connection -ComputerName 8.8.8.8 -Count 1 -Quiet -ErrorAction Stop) {
+            Write-Log "Internet connection detected." OK
+            return $true
+        }
+    } catch { }
+    try {
+        $null = Invoke-WebRequest -Uri 'https://www.microsoft.com' -UseBasicParsing -TimeoutSec 10 -ErrorAction Stop
+        Write-Log "Internet connection detected." OK
+        return $true
+    } catch { }
+    return $false
+}
+
+# =============================================================================
+#  3. Activate Windows  (MAS - HWID / permanent)
+# =============================================================================
+function Invoke-WindowsActivation {
+    if (-not (Confirm-Action "Activate Windows now (MAS - HWID / permanent)?")) {
+        Write-Log "Skipped Windows activation." WARN
+        return
+    }
+    Write-Log "Running Microsoft Activation Scripts (HWID)..."
+    try {
+        $mas = Invoke-RestMethod -Uri 'https://get.activated.win' -ErrorAction Stop
+        # /HWID = main menu option 1 (permanent HWID activation), fully unattended.
+        & ([scriptblock]::Create($mas)) /HWID
+        Write-Log "Activation routine finished (verify with 'slmgr /xpr')." OK
+    } catch {
+        Write-Log "Unattended activation failed: $($_.Exception.Message)" WARN
+        Write-Log "Falling back to the interactive MAS menu (choose 1, then 1)..." INFO
+        try { Invoke-Expression (Invoke-RestMethod -Uri 'https://get.activated.win') }
+        catch { Write-Log "MAS could not be launched: $($_.Exception.Message)" ERR }
+    }
+}
+
+# =============================================================================
+#  4. Download Office 2024 (background)
+# =============================================================================
+function Start-OfficeDownload {
+    if (-not (Confirm-Action "Download Office 2024 (ProPlus2024Retail.img, ~6 GB) in the background?")) {
+        Write-Log "Skipped Office download." WARN
+        return
+    }
+    try {
+        $downloads = Split-Path $script:OfficeDest -Parent
+        if (-not (Test-Path $downloads)) { New-Item -ItemType Directory -Force -Path $downloads | Out-Null }
+        $script:OfficeJob = Start-Job -Name OfficeDownload -ScriptBlock {
+            param($src, $dst)
+            try {
+                Import-Module BitsTransfer -ErrorAction Stop
+                Start-BitsTransfer -Source $src -Destination $dst -ErrorAction Stop
+            } catch {
+                (New-Object System.Net.WebClient).DownloadFile($src, $dst)
+            }
+        } -ArgumentList $script:OfficeUrl, $script:OfficeDest
+        Write-Log "Office download started in the background -> $($script:OfficeDest)" OK
+    } catch {
+        Write-Log "Could not start Office download: $($_.Exception.Message)" ERR
+    }
+}
+
+function Complete-OfficeDownload {
+    if (-not $script:OfficeJob) { return }
+    $job = Get-Job -Id $script:OfficeJob.Id -ErrorAction SilentlyContinue
+    if (-not $job) { return }
+    Write-Section "Finishing Office download"
+    if ($job.State -eq 'Running') {
+        Write-Log "Office is still downloading. Waiting for it to finish (leave this window open)..." WARN
+        Wait-Job $job | Out-Null
+    }
+    Receive-Job $job -ErrorAction SilentlyContinue | Out-Null
+    if ($job.State -eq 'Completed' -and (Test-Path $script:OfficeDest)) {
+        Write-Log "Office image ready: $($script:OfficeDest)" OK
+    } else {
+        Write-Log "Office download did not complete cleanly (job state: $($job.State)). Re-run if needed." WARN
+    }
+    Remove-Job $job -Force -ErrorAction SilentlyContinue
+}
+
+# =============================================================================
+#  5. Languages: English (primary) + Hebrew (secondary)
+# =============================================================================
+function Set-Languages {
+    Write-Log "Setting languages: English (primary), Hebrew (secondary)..."
+    try {
+        $cur = Get-WinUserLanguageList
+        if ($cur.LanguageTag -notcontains 'en-US') { $cur.Add('en-US') }
+        if ($cur.LanguageTag -notcontains 'he')    { $cur.Add('he') }
+
+        $ordered = @()
+        foreach ($tag in @('en-US', 'he')) {
+            $obj = $cur | Where-Object { $_.LanguageTag -eq $tag } | Select-Object -First 1
+            if ($obj) { $ordered += $obj }
+        }
+        foreach ($obj in $cur) {
+            if (@('en-US', 'he') -notcontains $obj.LanguageTag) { $ordered += $obj }
+        }
+        Set-WinUserLanguageList -LanguageList $ordered -Force
+        Write-Log "Language list set: $($ordered.LanguageTag -join ', ')" OK
+    } catch {
+        Write-Log "Failed to set languages: $($_.Exception.Message)" ERR
+    }
+}
+
+# =============================================================================
+#  6. Install apps (winget)
+# =============================================================================
+function Install-Apps {
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Log "winget (App Installer) not found - skipping app installs. Install 'App Installer' from the Store, then re-run." ERR
+        return
+    }
+
+    $apps = [ordered]@{
+        'Microsoft.VCRedist.2015+.x64' = 'Visual C++ Redistributable 2015+ (x64)'
+        'Python.Python.3.14'           = 'Python 3.14'
+        'Brave.Brave'                  = 'Brave Browser'
+        'Google.Chrome'                = 'Google Chrome'
+        'Microsoft.PowerShell'         = 'PowerShell 7'
+        'Microsoft.PowerToys'          = 'PowerToys'
+        'Oracle.VirtualBox'            = 'VirtualBox'
+        'Microsoft.VisualStudioCode'   = 'Visual Studio Code'
+        'KeePassXCTeam.KeePassXC'      = 'KeePassXC'
+        'emoacht.Monitorian'           = 'Monitorian'
+        'Git.Git'                      = 'Git'
+        'VideoLAN.VLC'                 = 'VLC media player'
+    }
+
+    Write-Log "Answer A at any prompt to install all remaining apps without asking again."
+    foreach ($id in $apps.Keys) {
+        $name = $apps[$id]
+        if (-not (Confirm-Action "Install $name  ($id)?" -AllowAll)) {
+            Write-Log "Skipped $name." WARN
+            continue
+        }
+        Write-Log "Installing $name..."
+        try {
+            winget install --id $id -e --source winget `
+                --accept-source-agreements --accept-package-agreements
+            if ($LASTEXITCODE -eq 0) {
+                Write-Log "$name installed." OK
+            } else {
+                Write-Log "${name}: winget exit code $LASTEXITCODE (may already be installed / needs restart)." WARN
+            }
+        } catch {
+            Write-Log "$name failed: $($_.Exception.Message)" ERR
+        }
+    }
+    Update-SessionPath
+    $script:PwshExe = Get-PwshExe
+}
+
+# =============================================================================
+#  Windows Terminal settings.json helpers
+# =============================================================================
+function Get-WTSettingsPath {
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $env:LOCALAPPDATA 'Packages\Microsoft.WindowsTerminalPreview_8wekyb3d8bbwe\LocalState\settings.json'),
+        (Join-Path $env:LOCALAPPDATA 'Microsoft\Windows Terminal\settings.json')
+    )
+    foreach ($p in $candidates) { if (Test-Path $p) { return $p } }
+    return $null
+}
+
+function Read-WTSettings {
+    $path = Get-WTSettingsPath
+    if (-not $path) {
+        Write-Log "Windows Terminal settings.json not found (open Terminal once to generate it)." WARN
+        return $null
+    }
+    $raw = Get-Content $path -Raw
+    $json = $null
+    try {
+        $json = $raw | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        # Strip // line comments (older WT settings are JSONC) and retry.
+        $stripped = ($raw -split "`n" | ForEach-Object { $_ -replace '^\s*//.*$', '' }) -join "`n"
+        try { $json = $stripped | ConvertFrom-Json -ErrorAction Stop }
+        catch { Write-Log "Could not parse Windows Terminal settings.json - leaving it untouched." ERR; return $null }
+    }
+    return [pscustomobject]@{ Path = $path; Json = $json }
+}
+
+function Save-WTSettings {
+    param([string]$Path, $Json)
+    Copy-Item $Path "$Path.bak" -Force -ErrorAction SilentlyContinue
+    Write-TextFileNoBom -Path $Path -Content ($Json | ConvertTo-Json -Depth 32)
+}
+
+function Get-WTPwshProfile {
+    param($Json, [switch]$Create)
+    if (-not $Json.profiles -or -not $Json.profiles.list) { return $null }
+    $p = $Json.profiles.list | Where-Object {
+        $_.source -eq 'Windows.Terminal.PowershellCore' -or
+        $_.commandline -like '*pwsh.exe*' -or
+        $_.name -eq 'PowerShell'
+    } | Select-Object -First 1
+    if (-not $p -and $Create -and $script:PwshExe) {
+        $p = [pscustomobject]@{
+            guid             = "{$([guid]::NewGuid())}"
+            name             = 'PowerShell'
+            commandline      = $script:PwshExe
+            startingDirectory = '%USERPROFILE%'
+        }
+        $Json.profiles.list += $p
+    }
+    return $p
+}
+
+# =============================================================================
+#  7. Default terminal application + default profile = PowerShell 7
+# =============================================================================
+function Set-DefaultTerminal {
+    # (a) Make Windows Terminal the default terminal application (Win11 console delegation).
+    try {
+        $key = 'HKCU:\Console\%%Startup'
+        if (-not (Test-Path $key)) { New-Item -Path $key -Force | Out-Null }
+        New-ItemProperty -Path $key -Name 'DelegationConsole'  -Value '{2EACA947-7F5F-4CFA-BA87-8F7FBEEFBE69}' -PropertyType String -Force | Out-Null
+        New-ItemProperty -Path $key -Name 'DelegationTerminal' -Value '{E12CFF52-A866-4C77-9A90-F570A7AA2C6B}' -PropertyType String -Force | Out-Null
+        Write-Log "Windows Terminal set as the default terminal application." OK
+    } catch {
+        Write-Log "Failed to set default terminal application: $($_.Exception.Message)" ERR
+    }
+
+    # (b) Default profile = PowerShell 7 (only if pwsh is installed).
+    if (-not $script:PwshExe) {
+        Write-Log "PowerShell 7 not installed - leaving Windows Terminal default profile unchanged." WARN
+        return
+    }
+    try {
+        $wt = Read-WTSettings
+        if (-not $wt) { return }
+        $pwshProfile = Get-WTPwshProfile -Json $wt.Json -Create
+        if (-not $pwshProfile) {
+            Write-Log "Could not find/create a PowerShell 7 profile in Windows Terminal." WARN
+            return
+        }
+        if ($wt.Json.PSObject.Properties['defaultProfile']) {
+            $wt.Json.defaultProfile = $pwshProfile.guid
+        } else {
+            $wt.Json | Add-Member -NotePropertyName defaultProfile -NotePropertyValue $pwshProfile.guid -Force
+        }
+        Save-WTSettings -Path $wt.Path -Json $wt.Json
+        Write-Log "Windows Terminal default profile set to PowerShell 7." OK
+    } catch {
+        Write-Log "Failed to set default profile: $($_.Exception.Message)" ERR
+    }
+}
+
+# =============================================================================
+#  8. Configure PowerShell 7 (oh-my-posh, Meslo font, modules, profile)
+# =============================================================================
+
+# --- embedded profile files (recreated verbatim on the fresh machine) --------
+$ProfileMain = @'
+# Load Oh My Posh with a Powerlevel10k theme
+$primary = Join-Path $env:OneDrive 'Documents\PowerShell\my-powershell-theme.json'
+$backup  = Join-Path $env:USERPROFILE 'OneDrive\Documents\PowerShell\my-powershell-theme.json'
+$cfg = @($primary,$backup) | Where-Object { Test-Path $_ } | Select-Object -First 1
+if (-not $cfg) { $cfg = Join-Path $env:USERPROFILE 'Documents\PowerShell\my-powershell-theme.json'
+                 oh-my-posh config export --format json | Set-Content $cfg }
+oh-my-posh init pwsh --config $cfg | Invoke-Expression
+
+
+# Nice extras
+Import-Module PSReadLine
+Set-PSReadLineOption -PredictionSource History -PredictionViewStyle ListView
+Import-Module posh-git
+Import-Module Terminal-Icons
+#f45873b3-b655-43a6-b217-97c00aa0db58 PowerToys CommandNotFound module
+
+Import-Module -Name Microsoft.WinGet.CommandNotFound
+#f45873b3-b655-43a6-b217-97c00aa0db58
+'@
+
+$ProfileAllHosts = @'
+
+#region conda initialize
+# !! Contents within this block are managed by 'conda init' !!
+If (Test-Path "C:\Users\netan\anaconda3\Scripts\conda.exe") {
+    (& "C:\Users\netan\anaconda3\Scripts\conda.exe" "shell.powershell" "hook") | Out-String | ?{$_} | Invoke-Expression
+}
+#endregion
+
+'@
+
+$ThemeJson = @'
+{
+  "$schema": "https://raw.githubusercontent.com/JanDeDobbeleer/oh-my-posh/main/themes/schema.json",
+  "blocks": [
+    {
+      "alignment": "left",
+      "segments": [
+        {
+          "foreground": "#FF6AC1",
+          "style": "plain",
+          "template": "{{ .UserName }}@{{ .HostName }} ",
+          "type": "session"
+        },
+        {
+          "foreground": "#77E4F7",
+          "properties": {
+            "style": "full"
+          },
+          "style": "plain",
+          "template": "{{ .Path }} ",
+          "type": "path"
+        },
+        {
+          "foreground": "#FFE700",
+          "style": "plain",
+          "template": "{{ .HEAD }} ",
+          "type": "git"
+        },
+        {
+          "foreground": "#43D426",
+          "style": "plain",
+          "template": "❯ ",
+          "type": "text"
+        }
+      ],
+      "type": "prompt"
+    }
+  ],
+  "version": 3
+}
+'@
+
+$PwshConfigJson = @'
+{"Microsoft.PowerShell:ExecutionPolicy":"RemoteSigned"}
+'@
+
+function Set-PowerShell7Environment {
+    if (-not $script:PwshExe) {
+        Write-Log "PowerShell 7 not installed - skipping PowerShell 7 configuration." WARN
+        return
+    }
+
+    # (a) oh-my-posh via winget, then refresh PATH so the child pwsh sees it.
+    if (Confirm-Action "Install oh-my-posh (prompt theme engine)?") {
+        try {
+            winget install --id JanDeDobbeleer.OhMyPosh -e --source winget `
+                --accept-source-agreements --accept-package-agreements
+            Update-SessionPath
+            Write-Log "oh-my-posh installed." OK
+        } catch {
+            Write-Log "oh-my-posh install failed: $($_.Exception.Message)" ERR
+        }
+    }
+
+    # (b) Write the profile files into PowerShell 7's real profile folder.
+    try {
+        $ps7ProfilePath = (& $script:PwshExe -NoProfile -Command '$PROFILE.CurrentUserCurrentHost').Trim()
+        if ($ps7ProfilePath) {
+            $ps7Dir = Split-Path $ps7ProfilePath -Parent
+            if (-not (Test-Path $ps7Dir)) { New-Item -ItemType Directory -Force -Path $ps7Dir | Out-Null }
+
+            foreach ($f in @(
+                    @{ Name = 'Microsoft.PowerShell_profile.ps1'; Body = $ProfileMain },
+                    @{ Name = 'profile.ps1';                      Body = $ProfileAllHosts },
+                    @{ Name = 'my-powershell-theme.json';         Body = $ThemeJson },
+                    @{ Name = 'powershell.config.json';           Body = $PwshConfigJson })) {
+                $dest = Join-Path $ps7Dir $f.Name
+                if (Test-Path $dest) { Copy-Item $dest "$dest.bak" -Force -ErrorAction SilentlyContinue }
+                Write-TextFileNoBom -Path $dest -Content $f.Body
+            }
+            Write-Log "PowerShell 7 profile written to $ps7Dir" OK
+        }
+    } catch {
+        Write-Log "Failed to write PowerShell 7 profile: $($_.Exception.Message)" ERR
+    }
+
+    # (c) In a real pwsh process: trust gallery, install modules, install Meslo font.
+    try {
+        $block = @'
+$ErrorActionPreference = "Continue"
+try { Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force } catch {}
+try { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop | Out-Null } catch { Write-Warning "NuGet provider: $($_.Exception.Message)" }
+try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
+foreach ($m in "PSReadLine","posh-git","Terminal-Icons") {
+    try { Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -ErrorAction Stop; Write-Host "[+] module installed: $m" }
+    catch { Write-Warning "module ${m}: $($_.Exception.Message)" }
+}
+$omp = (Get-Command oh-my-posh -ErrorAction SilentlyContinue).Source
+if (-not $omp) { $c = Join-Path $env:LOCALAPPDATA "Programs\oh-my-posh\bin\oh-my-posh.exe"; if (Test-Path $c) { $omp = $c } }
+if ($omp) { try { & $omp font install meslo; Write-Host "[+] Meslo Nerd Font installed" } catch { Write-Warning "font install: $($_.Exception.Message)" } }
+else { Write-Warning "oh-my-posh not found on PATH; run 'oh-my-posh font install meslo' manually" }
+'@
+        $tmp = Join-Path $env:TEMP 'pw_ps7_setup.ps1'
+        Write-TextFileNoBom -Path $tmp -Content $block
+        Write-Log "Installing PowerShell 7 modules and Meslo Nerd Font (in pwsh)..."
+        & $script:PwshExe -NoProfile -ExecutionPolicy Bypass -File $tmp
+        Remove-Item $tmp -Force -ErrorAction SilentlyContinue
+    } catch {
+        Write-Log "PowerShell 7 module/font setup failed: $($_.Exception.Message)" ERR
+    }
+
+    # (d) Set the PowerShell 7 profile font face in Windows Terminal.
+    try {
+        $wt = Read-WTSettings
+        if ($wt) {
+            $pwshProfile = Get-WTPwshProfile -Json $wt.Json -Create
+            if ($pwshProfile) {
+                $face = 'MesloLGM Nerd Font'
+                if ($pwshProfile.PSObject.Properties['font'] -and $pwshProfile.font) {
+                    if ($pwshProfile.font.PSObject.Properties['face']) { $pwshProfile.font.face = $face }
+                    else { $pwshProfile.font | Add-Member -NotePropertyName face -NotePropertyValue $face -Force }
+                } else {
+                    $pwshProfile | Add-Member -NotePropertyName font -NotePropertyValue ([pscustomobject]@{ face = $face }) -Force
+                }
+                Save-WTSettings -Path $wt.Path -Json $wt.Json
+                Write-Log "Windows Terminal PowerShell 7 font set to '$face'." OK
+            }
+        }
+    } catch {
+        Write-Log "Failed to set Windows Terminal font: $($_.Exception.Message)" ERR
+    }
+}
+
+# =============================================================================
+#  9. Turn off all startup apps
+# =============================================================================
+function Disable-StartupApps {
+    if (-not (Confirm-Action "Turn OFF all current startup apps?")) {
+        Write-Log "Left startup apps unchanged." WARN
+        return
+    }
+    # Task-Manager-style disable: write a 'disabled' blob into StartupApproved.
+    # First byte 0x03 = disabled (0x02 = enabled). Fully reversible from Task Manager.
+    $disabled = [byte[]](0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+    $count = 0
+
+    $runMap = @(
+        @{ Run = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+           Approved = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' },
+        @{ Run = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Run'
+           Approved = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run' },
+        @{ Run = 'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Run'
+           Approved = 'HKLM:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run32' }
+    )
+
+    foreach ($m in $runMap) {
+        if (-not (Test-Path $m.Run)) { continue }
+        if (-not (Test-Path $m.Approved)) { New-Item -Path $m.Approved -Force | Out-Null }
+        foreach ($name in (Get-Item $m.Run).Property) {
+            try {
+                New-ItemProperty -Path $m.Approved -Name $name -Value $disabled -PropertyType Binary -Force | Out-Null
+                Write-Log "Disabled startup: $name" OK
+                $count++
+            } catch {
+                Write-Log "Could not disable '$name': $($_.Exception.Message)" WARN
+            }
+        }
+    }
+
+    # Startup folder shortcuts (per-user + all-users).
+    $approvedSF = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\StartupFolder'
+    if (-not (Test-Path $approvedSF)) { New-Item -Path $approvedSF -Force | Out-Null }
+    foreach ($folder in @([Environment]::GetFolderPath('Startup'), [Environment]::GetFolderPath('CommonStartup'))) {
+        if (-not $folder -or -not (Test-Path $folder)) { continue }
+        foreach ($item in Get-ChildItem -Path $folder -File -ErrorAction SilentlyContinue) {
+            try {
+                New-ItemProperty -Path $approvedSF -Name $item.Name -Value $disabled -PropertyType Binary -Force | Out-Null
+                Write-Log "Disabled startup item: $($item.Name)" OK
+                $count++
+            } catch {
+                Write-Log "Could not disable '$($item.Name)': $($_.Exception.Message)" WARN
+            }
+        }
+    }
+
+    Write-Log "Turned off $count startup entr$(if($count -eq 1){'y'}else{'ies'})." OK
+    Write-Log "Note: some packaged (Store) app startup tasks may still need toggling in Settings > Apps > Startup." INFO
+}
+
+# =============================================================================
+#  Main
+# =============================================================================
+Write-Host ""
+Write-Host "  ____                       __        ___           _                    " -ForegroundColor Cyan
+Write-Host " |  _ \ _____      _____ _ __ \ \      / (_)_ __   __| | _____      _____  " -ForegroundColor Cyan
+Write-Host " | |_) / _ \ \ /\ / / _ \ '__| \ \ /\ / /| | '_ \ / _\` |/ _ \ \ /\ / / __| " -ForegroundColor Cyan
+Write-Host " |  __/ (_) \ V  V /  __/ |     \ V  V / | | | | | (_| | (_) \ V  V /\__ \ " -ForegroundColor Cyan
+Write-Host " |_|   \___/ \_/\_/ \___|_|      \_/\_/  |_|_| |_|\__,_|\___/ \_/\_/ |___/ " -ForegroundColor Cyan
+Write-Host ""
+Write-Host "  Fresh Windows 11 (25H2+) setup" -ForegroundColor Gray
+if ($script:Auto) { Write-Log "Running in -Auto mode: all prompts auto-accepted." }
+if ($script:LogFile) { Write-Log "Logging to $($script:LogFile)" }
+
+# 2. Connectivity gate
+Write-Section "2. Internet connectivity"
+if (-not (Test-Connectivity)) {
+    Write-Log "No internet connection detected. Connect and re-run. Aborting." ERR
+    try { Stop-Transcript | Out-Null } catch { }
+    return
+}
+
+# 3-9
+Invoke-Step "3. Activate Windows"          { Invoke-WindowsActivation }
+Invoke-Step "4. Download Office 2024"       { Start-OfficeDownload }
+Invoke-Step "5. Languages (English + Hebrew)" { Set-Languages }
+Invoke-Step "6. Install apps (winget)"      { Install-Apps }
+Invoke-Step "7. Default terminal + profile" { Set-DefaultTerminal }
+Invoke-Step "8. Configure PowerShell 7"     { Set-PowerShell7Environment }
+Invoke-Step "9. Turn off startup apps"      { Disable-StartupApps }
+
+# Reconcile the background Office download last.
+Complete-OfficeDownload
+
+Write-Section "Done"
+Write-Log "Power_Windows finished." OK
+Write-Log "Recommended: restart Windows Terminal (font/profile) and sign out/in or reboot (language)." INFO
+if ($script:LogFile) { Write-Log "Full log: $($script:LogFile)" INFO }
+try { Stop-Transcript | Out-Null } catch { }
