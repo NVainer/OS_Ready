@@ -19,7 +19,7 @@ set -Eeuo pipefail
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
-readonly P10K_URL='https://raw.githubusercontent.com/NVainer/fast_ubuntu/refs/heads/main/my_p10k.zsh'
+readonly P10K_URL='https://raw.githubusercontent.com/NVainer/OS_Ready/refs/heads/main/fast_ubuntu/my_p10k.zsh'
 readonly LOG_FILE="${HOME}/ubuntu_kali.log"
 readonly REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)"

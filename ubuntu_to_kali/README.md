@@ -11,12 +11,12 @@
 # one liner
 
 ```bash
-curl -L -o Fast https://raw.githubusercontent.com/NVainer/ubuntu_to_kali/main/ubuntu_kali && chmod +x ./Fast && ./Fast
+curl -L -o Fast https://raw.githubusercontent.com/NVainer/OS_Ready/main/ubuntu_to_kali/ubuntu_kali.sh && chmod +x ./Fast && ./Fast
 ```
 OR
 
 ```bash
-wget -O Fast https://raw.githubusercontent.com/NVainer/ubuntu_to_kali/main/ubuntu_kali && chmod +x ./Fast && ./Fast
+wget -O Fast https://raw.githubusercontent.com/NVainer/OS_Ready/main/ubuntu_to_kali/ubuntu_kali.sh && chmod +x ./Fast && ./Fast
 ```
 
 <br><br>
