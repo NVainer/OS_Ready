@@ -68,7 +68,7 @@ harness — elevation, connectivity, environment probe, prompts, reporting — w
 - Steps 10-16 write per-user (HKCU) settings — run as the user whose desktop you're setting up. Explorer is restarted at the end to apply taskbar/Start changes.
 - **Elevation** opens the admin session as a **Windows Terminal tab** (in a dedicated `Power_Windows` window). Windows' security model keeps elevated tabs out of an unelevated window, so it's a separate elevated window that repeat runs share as tabs — not a tab inside your original window.
 - Restart Windows Terminal (font/profile) and sign out/in or reboot (language) after it finishes.
-- **Office** is downloaded during the run and installed at the end (step 17). The install detects completion heuristically (all core apps present + the click-to-run client exited); if it can't confirm within 60 min it leaves the image mounted so you can finish manually.
+- **Office** is downloaded during the run and installed at the end (step 17): the image is mounted and `Setup.exe` is run **from the image root** (so it finds its `Office\` payload). It keeps waiting while Office is actively installing and gives up after **5 min with no progress** (or 40 min total), leaving the image mounted if it can't confirm completion.
 
 ### Step 11 — Start folder pins (needs one capture)
 

@@ -266,30 +266,44 @@ function Complete-OfficeDownload {
 
 # Wait until the Office click-to-run install is finished. Returns $true on completion.
 function Wait-OfficeInstall {
-    param([int]$TimeoutMinutes = 60)
-    Write-Log "Waiting for Office to finish installing (up to $TimeoutMinutes min)..."
-    $deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+    # Give up after $StallMinutes with NO progress (installer idle and no new apps),
+    # rather than blocking for a fixed hour. Keeps waiting while Office is installing.
+    # $MaxMinutes is a hard safety cap.
+    param([int]$StallMinutes = 5, [int]$MaxMinutes = 40)
+    Write-Log "Waiting for Office to install (gives up after $StallMinutes min with no progress)..."
+    $start = Get-Date
+    $lastProgress = Get-Date
     $roots = @(
         (Join-Path $env:ProgramFiles 'Microsoft Office\root\Office16'),
         (Join-Path ${env:ProgramFiles(x86)} 'Microsoft Office\root\Office16')
     )
     $core = @('WINWORD.EXE', 'EXCEL.EXE', 'POWERPNT.EXE', 'OUTLOOK.EXE')
+    $maxSeen = 0
     $stable = 0
-    while ((Get-Date) -lt $deadline) {
-        Start-Sleep -Seconds 20
+    while ($true) {
+        Start-Sleep -Seconds 15
         $office16 = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
         $present = @()
         if ($office16) { foreach ($a in $core) { if (Test-Path (Join-Path $office16 $a)) { $present += $a } } }
+        $count = $present.Count
         $c2r = Get-Process -Name 'OfficeC2RClient' -ErrorAction SilentlyContinue
-        if ($present.Count -eq $core.Count -and -not $c2r) {
+        $now = Get-Date
+        if ($c2r -or $count -gt $maxSeen) { $lastProgress = $now; if ($count -gt $maxSeen) { $maxSeen = $count } }
+        if ($count -eq $core.Count -and -not $c2r) {
             $stable++
             if ($stable -ge 2) { Write-Log "Office installation complete." OK; return $true }
         } else {
             $stable = 0
         }
+        if (($now - $lastProgress).TotalMinutes -ge $StallMinutes) {
+            Write-Log "No Office install progress for $StallMinutes min - giving up (Setup likely failed)." WARN
+            return $false
+        }
+        if (($now - $start).TotalMinutes -ge $MaxMinutes) {
+            Write-Log "Office install exceeded $MaxMinutes min - giving up." WARN
+            return $false
+        }
     }
-    Write-Log "Timed out waiting for Office to finish (it may still be installing)." WARN
-    return $false
 }
 
 # Mount the downloaded Office image, run Setup, wait, unmount, then activate (Ohook).
@@ -320,7 +334,8 @@ function Install-Office {
         }
         if (-not (Test-Path $setup)) { throw "Setup.exe not found on the mounted image." }
         Write-Log "Launching Office setup: $setup"
-        Start-Process -FilePath $setup | Out-Null
+        # Run from the image root so Setup.exe finds its Office\ payload via relative paths.
+        Start-Process -FilePath $setup -WorkingDirectory "${drive}:\" | Out-Null
         $installed = Wait-OfficeInstall
         if ($installed) { Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
     } catch {
