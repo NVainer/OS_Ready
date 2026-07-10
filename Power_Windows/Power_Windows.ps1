@@ -224,6 +224,10 @@ function Invoke-WindowsActivation {
 #  4. Download Office 2024 (background)
 # =============================================================================
 function Start-OfficeDownload {
+    if ((Test-Path $script:OfficeDest) -and ((Get-Item $script:OfficeDest).Length -gt 4GB)) {
+        Write-Log "Office image already downloaded ($([math]::Round((Get-Item $script:OfficeDest).Length / 1GB, 1)) GB); skipping the download." OK
+        return
+    }
     if (-not (Confirm-Action "Download Office 2024 (ProPlus2024Retail.img, ~6 GB) in the background?")) {
         Write-Log "Skipped Office download." WARN
         return
