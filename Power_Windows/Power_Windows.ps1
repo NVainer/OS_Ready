@@ -958,7 +958,7 @@ function Set-DoNotDisturb {
 
 # --- Clean app shortcuts off the desktop (keep Recycle Bin and real files) ---
 function Remove-DesktopShortcuts {
-    if (-not (Confirm-Action "Delete the app shortcuts on the desktop (Recycle Bin and real files are kept)?")) { return }
+    if (-not (Confirm-Action "Delete desktop shortcuts and remove bloatware apps (Xbox, LinkedIn, Clipchamp, etc.)?")) { return }
     try {
         $count = 0
         foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory'))) {
@@ -969,6 +969,22 @@ function Remove-DesktopShortcuts {
         }
         Write-Log "Removed $count desktop shortcut$(if ($count -eq 1) { '' } else { 's' })." OK
     } catch { Write-Log "Failed to clean desktop shortcuts: $($_.Exception.Message)" ERR }
+
+    # Remove bloatware apps for all users (Xbox, LinkedIn, Feedback Hub, Clipchamp, Solitaire...).
+    $removeApps = @(
+        'Microsoft.GamingApp', 'Microsoft.XboxIdentityProvider', 'Microsoft.XboxSpeechToTextOverlay',
+        'Microsoft.XboxGamingOverlay', 'Microsoft.GamingServices', '7EE7776C.LinkedInforWindows',
+        'Microsoft.WindowsFeedbackHub', 'Microsoft.GetHelp', 'Microsoft.Getstarted',
+        'Clipchamp.Clipchamp', 'Microsoft.MicrosoftSolitaireCollection'
+    )
+    $errBefore = $global:Error.Count
+    $pp = $ProgressPreference; $ProgressPreference = 'SilentlyContinue'
+    foreach ($pkg in $removeApps) {
+        Get-AppxPackage -AllUsers $pkg -ErrorAction SilentlyContinue | Remove-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    }
+    $ProgressPreference = $pp
+    while ($global:Error.Count -gt $errBefore) { $global:Error.RemoveAt(0) }   # keep the step clean
+    Write-Log "Removed bloatware apps." OK
 }
 
 # --- Restart Explorer so taskbar/Start changes take effect -------------------
@@ -1050,7 +1066,7 @@ Invoke-Step "13. Clean taskbar"             { Clear-TaskbarPins }
 Invoke-Step "14. Never sleep/screen/hibernate" { Set-NeverSleep }
 Invoke-Step "15. Start recommendations off" { Disable-StartRecommendations }
 Invoke-Step "16. Do Not Disturb"            { Set-DoNotDisturb }
-Invoke-Step "17. Clean desktop shortcuts"   { Remove-DesktopShortcuts }
+Invoke-Step "17. Clean desktop & remove bloat"   { Remove-DesktopShortcuts }
 
 # Apply taskbar/Start tweaks (steps 10-13, 15) by restarting Explorer.
 if (Confirm-Action "Restart Explorer now to apply the taskbar/Start changes?") { Restart-Explorer }
