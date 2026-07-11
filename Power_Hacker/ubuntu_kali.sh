@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# ubuntu_to_kali — turn a fresh Ubuntu GNOME install into a pentesting workstation.
+# Power_Hacker — turn a fresh Ubuntu GNOME install into a pentesting workstation.
 # Source for the compiled `ubuntu_kali` / `Fast` binary.
 #
 # Usage:
@@ -19,7 +19,7 @@ set -Eeuo pipefail
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
-readonly P10K_URL='https://raw.githubusercontent.com/NVainer/OS_Ready/refs/heads/main/fast_ubuntu/my_p10k.zsh'
+readonly P10K_URL='https://raw.githubusercontent.com/NVainer/OS_Ready/refs/heads/main/Power_Ubuntu/my_p10k.zsh'
 readonly LOG_FILE="${HOME}/ubuntu_kali.log"
 readonly REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)"
@@ -28,6 +28,17 @@ readonly REAL_HOME
 
 # Burp Suite — bump this when a new release is out.
 readonly BURP_VERSION='2025.8.7'
+readonly VERSION='1.0.0'
+
+# Sections to run, in order. Single source of truth shared by the main loop,
+# the usage text, and --list-sections.
+SECTIONS=(
+  essentials dev security firefox brave
+  gnome theme hebrew extensions
+  zsh
+  pentest metasploit burp wordlists payloads
+  ssh
+)
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -39,6 +50,7 @@ FULL_INSTALL=false
 ASSUME_YES=false
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
+DRY_RUN=false
 TERM_CUSTOMIZED=false
 PROFILE_PATH=""
 SUDO_KEEPALIVE_PID=""
@@ -76,18 +88,20 @@ section_enabled() {
 # -----------------------------------------------------------------------------
 usage() {
   cat <<EOF
-ubuntu_to_kali — turn Ubuntu into a pentesting workstation
+Power_Hacker — turn Ubuntu into a pentesting workstation  (v${VERSION})
 
 Usage: $0 [options]
 
   --full              install everything, skip prompts
   --yes, -y           accept all y/n prompts
   --only=A,B,C        run only listed sections
-  --skip=A,B,C        skip listed sections
+  --skip=A,B,C        run all sections except these
+  --dry-run           print the sections that would run, then exit
+  --list-sections     print every section name, then exit
+  --version, -V       print version and exit
   --help, -h          show this
 
-Sections: essentials dev security firefox brave gnome theme hebrew extensions
-          zsh pentest metasploit burp wordlists payloads ssh
+Sections: ${SECTIONS[*]}
 EOF
 }
 
@@ -95,12 +109,15 @@ parse_args() {
   local arg
   for arg in "$@"; do
     case "$arg" in
-      --full)      FULL_INSTALL=true ;;
-      --yes|-y)    ASSUME_YES=true ;;
-      --only=*)    ONLY_SECTIONS="${arg#--only=}" ;;
-      --skip=*)    SKIP_SECTIONS="${arg#--skip=}" ;;
-      --help|-h)   usage; exit 0 ;;
-      *)           err "Unknown argument: $arg"; usage; exit 2 ;;
+      --full)          FULL_INSTALL=true ;;
+      --yes|-y)        ASSUME_YES=true ;;
+      --only=*)        ONLY_SECTIONS="${arg#--only=}" ;;
+      --skip=*)        SKIP_SECTIONS="${arg#--skip=}" ;;
+      --dry-run)       DRY_RUN=true ;;
+      --list-sections) printf '%s\n' "${SECTIONS[@]}"; exit 0 ;;
+      --version|-V)    echo "$VERSION"; exit 0 ;;
+      --help|-h)       usage; exit 0 ;;
+      *)               err "Unknown argument: $arg"; usage; exit 2 ;;
     esac
   done
 }
@@ -117,8 +134,11 @@ preflight() {
     warn "This script is tuned for Ubuntu and may misbehave elsewhere."
     ask_yes "Continue anyway?" || exit 1
   fi
+  # ICMP first (fast); fall back to HTTPS since many networks filter ping.
   if ! ping -c1 -W2 archive.ubuntu.com >/dev/null 2>&1 \
-     && ! ping -c1 -W2 8.8.8.8         >/dev/null 2>&1; then
+     && ! ping -c1 -W2 8.8.8.8         >/dev/null 2>&1 \
+     && ! { command -v curl >/dev/null 2>&1 \
+            && curl -fsS --max-time 5 -o /dev/null https://archive.ubuntu.com; }; then
     err "No network connectivity."
     exit 1
   fi
@@ -216,6 +236,20 @@ BANNER
 apt_update()  { sudo apt-get update -qq; }
 apt_install() { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@"; }
 
+# Install only the packages that actually exist in the configured repos, so a
+# single name that's missing on a given Ubuntu release doesn't fail the batch.
+install_available() {
+  local pkgs=() p
+  for p in "$@"; do
+    if apt-cache show "$p" >/dev/null 2>&1; then
+      pkgs+=("$p")
+    else
+      warn "Package not in repos, skipping: $p"
+    fi
+  done
+  (( ${#pkgs[@]} )) && apt_install "${pkgs[@]}"
+}
+
 # -----------------------------------------------------------------------------
 # Shared helpers
 # -----------------------------------------------------------------------------
@@ -261,6 +295,17 @@ EOF
     ubuntu-restricted-extras \
     gnome-tweaks gnome-shell-extensions \
     yaru-theme-gtk yaru-theme-icon
+
+  log "Installing CLI quality-of-life tools..."
+  install_available \
+    tmux ripgrep fd-find bat jq btop tree ncdu \
+    pipx python3-venv
+
+  # Ubuntu ships a couple of these under alternate binary names — add the
+  # familiar names to ~/.local/bin so `bat` and `fd` just work.
+  mkdir -p "$REAL_HOME/.local/bin"
+  [[ -x /usr/bin/batcat ]] && ln -sf /usr/bin/batcat "$REAL_HOME/.local/bin/bat"
+  [[ -x /usr/bin/fdfind ]] && ln -sf /usr/bin/fdfind "$REAL_HOME/.local/bin/fd"
 
   if ! flatpak remote-list --columns=name 2>/dev/null | grep -qx 'flathub'; then
     log "Adding Flathub remote..."
@@ -316,12 +361,13 @@ section_dev() {
 }
 
 section_security() {
-  ask_yes "Install security tools (UFW, fail2ban, AppArmor utils, KeePassXC)?" || return 0
+  ask_yes "Install security tools (AppArmor utils, KeePassXC, gufw)?" || return 0
   log "Installing security tools..."
-  apt_install gufw fail2ban apparmor-utils keepassxc
-
-  sudo systemctl enable --now fail2ban
-  sudo ufw --force enable
+  # gufw pulls in ufw but we deliberately DON'T enable the firewall here: on a
+  # pentest box a default deny-incoming policy blocks your own reverse shells and
+  # listeners. fail2ban is skipped too — it guards SSH, which this profile
+  # disables (section_ssh). Enable either by hand if an engagement calls for it.
+  apt_install gufw apparmor-utils keepassxc
 
   if systemctl list-unit-files | grep -q '^apache2.service'; then
     sudo systemctl disable apache2 || true
@@ -347,9 +393,6 @@ Pin-Priority: 1001
 EOF
   apt_update
   apt_install firefox
-
-  # Headless launch to materialise the profile; ignore exit code.
-  timeout 5s firefox --headless >/dev/null 2>&1 || true
 
   log "Installing FoxyProxy via enterprise policy..."
   sudo mkdir -p /etc/firefox/policies
@@ -383,7 +426,7 @@ section_gnome() {
   ask_yes 'Apply GNOME tweaks (dark mode, dock at bottom, Do Not Disturb, sane Nautilus sort)?' || return 0
   log "Tweaking GNOME..."
 
-  gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+  gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'                || true
   gsettings set org.gnome.shell.extensions.ding show-home false                       || true
   gsettings set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'        || true
   gsettings set org.gnome.shell.extensions.dash-to-dock dock-fixed false              || true
@@ -410,9 +453,9 @@ section_theme() {
 section_hebrew() {
   ask_yes 'Add Hebrew (IL) keyboard layout with Alt+Shift toggle?' || return 0
   gsettings set org.gnome.desktop.input-sources xkb-options \
-    "['grp:alt_shift_toggle', 'lv3:ralt_switch']"
+    "['grp:alt_shift_toggle', 'lv3:ralt_switch']" || true
   gsettings set org.gnome.desktop.input-sources sources \
-    "[('xkb', 'us'), ('xkb', 'il')]"
+    "[('xkb', 'us'), ('xkb', 'il')]" || true
 }
 
 section_extensions() {
@@ -466,7 +509,7 @@ section_zsh() {
   ask_yes 'Install ZSH + Oh-My-Zsh + Powerlevel10k?' || return 0
 
   log "Installing zsh..."
-  apt_install zsh zsh-common zsh-doc
+  apt_install zsh zsh-common
   sudo chsh -s "$(command -v zsh)" "$REAL_USER"
 
   if [[ ! -d "$REAL_HOME/.oh-my-zsh" ]]; then
@@ -486,13 +529,17 @@ section_zsh() {
   clone_if_missing https://github.com/zsh-users/zsh-autosuggestions.git      "$zsh_custom/plugins/zsh-autosuggestions"
   clone_if_missing https://github.com/zsh-users/zsh-syntax-highlighting.git  "$zsh_custom/plugins/zsh-syntax-highlighting"
 
-  cp "$REAL_HOME/.zshrc" "$REAL_HOME/.zshrc.bak.$(date +%s)"
-  sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|'                 "$REAL_HOME/.zshrc"
-  sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' "$REAL_HOME/.zshrc"
+  if [[ -f "$REAL_HOME/.zshrc" ]]; then
+    cp "$REAL_HOME/.zshrc" "$REAL_HOME/.zshrc.bak.$(date +%s)"
+    sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|'                 "$REAL_HOME/.zshrc"
+    sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' "$REAL_HOME/.zshrc"
+  else
+    warn "~/.zshrc not found (Oh-My-Zsh may not have created it); skipping theme/plugin rewrite."
+  fi
 
   curl -fsSL "$P10K_URL" -o "$REAL_HOME/.p10k.zsh"
 
-  if ! grep -q 'POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD' "$REAL_HOME/.zshrc"; then
+  if [[ -f "$REAL_HOME/.zshrc" ]] && ! grep -q 'POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD' "$REAL_HOME/.zshrc"; then
     cat >> "$REAL_HOME/.zshrc" <<'EOF'
 POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
@@ -525,16 +572,62 @@ install_meslo_nf() {
 }
 
 section_pentest() {
-  ask_yes "Install pentest tools (nmap, aircrack-ng, hashcat, hydra, gobuster, sqlmap, john, tcpdump, nikto, wireshark, postgresql, ...)?" || return 0
-  log "Installing pentest tools..."
+  ask_yes "Install pentest tools (nmap, wireshark, sqlmap, hydra, ffuf, radare2, searchsploit, ProjectDiscovery suite, ...)?" || return 0
+  log "Installing core pentest tools from apt..."
   apt_install \
     nmap aircrack-ng hashcat hydra gobuster sqlmap \
     john netcat-traditional tcpdump \
     openvpn whois nikto \
-    postgresql postgresql-contrib libpq-dev
+    postgresql postgresql-contrib libpq-dev libpcap-dev
+
+  # Broader tool set — filtered so a name missing on a given release is skipped
+  # rather than failing the whole batch.
+  install_available \
+    ffuf dnsutils dnsrecon enum4linux smbclient masscan proxychains4 \
+    binwalk foremost steghide libimage-exiftool-perl radare2
 
   sudo systemctl enable --now postgresql
+
+  # Wireshark's debconf asks whether non-root users may capture. Non-interactive
+  # installs default to "no", leaving dumpcap root-only. Preseed "yes", then add
+  # the user to the 'wireshark' group (effective after the next login).
+  echo 'wireshark-common wireshark-common/install-setuid boolean true' \
+    | sudo debconf-set-selections
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q wireshark
+  sudo usermod -aG wireshark "$REAL_USER" || true
+
+  # searchsploit / exploit-db archive — not packaged on Ubuntu, so clone the repo.
+  if ! command -v searchsploit >/dev/null 2>&1 && [[ ! -d /opt/exploitdb ]]; then
+    log "Installing searchsploit (exploit-db)..."
+    if sudo git clone --depth=1 https://gitlab.com/exploit-database/exploitdb.git /opt/exploitdb; then
+      sudo ln -sf /opt/exploitdb/searchsploit /usr/local/bin/searchsploit
+    else
+      warn "searchsploit clone failed; skipping."
+    fi
+  fi
+
+  # ProjectDiscovery Go tools — installed into ~/.local/bin (on PATH via ~/.profile
+  # after re-login). Needs the Dev section's Go; each install is best-effort.
+  if command -v go >/dev/null 2>&1; then
+    log "Installing ProjectDiscovery tools via 'go install' (this can take a while)..."
+    local gotool
+    for gotool in \
+      github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest \
+      github.com/projectdiscovery/httpx/cmd/httpx@latest \
+      github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest \
+      github.com/projectdiscovery/naabu/v2/cmd/naabu@latest; do
+      GOBIN="$REAL_HOME/.local/bin" go install "$gotool" || warn "go install failed: $gotool"
+    done
+  else
+    warn "Go not found (run the Dev section) — skipping nuclei/httpx/subfinder/naabu."
+  fi
+
+  # netexec (nxc — the CrackMapExec successor) via pipx.
+  if command -v pipx >/dev/null 2>&1; then
+    log "Installing netexec (nxc) via pipx..."
+    pipx install netexec >/dev/null 2>&1 || warn "pipx install netexec failed; skipping."
+    pipx ensurepath >/dev/null 2>&1 || true
+  fi
 }
 
 section_metasploit() {
@@ -545,9 +638,8 @@ section_metasploit() {
     return 0
   fi
 
-  log "Installing Metasploit build deps..."
-  apt_install build-essential zlib1g zlib1g-dev libpq-dev libpcap-dev libsqlite3-dev ruby ruby-dev
-
+  # The omnibus installer ships a self-contained package (bundled Ruby, etc.),
+  # so no separate build toolchain is needed here.
   local tmp
   tmp=$(mktemp -d)
   (
@@ -578,6 +670,15 @@ section_burp() {
     return 0
   fi
 
+  # Sanity-check the download before running it as root — a CDN error page saved
+  # as the installer would otherwise be executed.
+  if [[ "$(stat -c%s "$installer" 2>/dev/null || echo 0)" -lt 1000000 ]] \
+     || ! head -c2 "$installer" | grep -q '#!'; then
+    warn "Burp installer looks wrong (too small or not a shell script); skipping."
+    rm -f "$installer"
+    return 0
+  fi
+
   chmod +x "$installer"
   sudo "$installer" -q -dir /opt/BurpSuiteCommunity -overwrite -nofilefailures
   rm -f "$installer"
@@ -593,8 +694,20 @@ section_wordlists() {
   mkdir -p "$REAL_HOME/wordlists"
   clone_if_missing https://github.com/danielmiessler/SecLists.git "$REAL_HOME/wordlists/SecLists" --depth=1
   if [[ ! -f "$REAL_HOME/wordlists/rockyou.txt" ]]; then
-    wget -q -O "$REAL_HOME/wordlists/rockyou.txt" \
-      https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt
+    # Prefer the copy SecLists already ships; fall back to a direct download.
+    local sl_rock="$REAL_HOME/wordlists/SecLists/Passwords/Leaked-Databases/rockyou.txt.tar.gz"
+    if [[ -f "$sl_rock" ]]; then
+      log "Extracting rockyou.txt from SecLists..."
+      tar -xzf "$sl_rock" -C "$REAL_HOME/wordlists/"
+    else
+      wget -q -O "$REAL_HOME/wordlists/rockyou.txt" \
+        https://github.com/brannondorsey/naive-hashcat/releases/download/data/rockyou.txt
+    fi
+    # Sanity-check size (~130 MB); warn if a truncated/failed download slipped through.
+    if [[ -f "$REAL_HOME/wordlists/rockyou.txt" ]]; then
+      local sz; sz=$(stat -c%s "$REAL_HOME/wordlists/rockyou.txt" 2>/dev/null || echo 0)
+      (( sz > 100000000 )) || warn "rockyou.txt is smaller than expected ($sz bytes)."
+    fi
   fi
 }
 
@@ -621,8 +734,20 @@ section_ssh() {
 main() {
   parse_args "$@"
 
+  # Show which sections would run, then exit — makes no changes.
+  if $DRY_RUN; then
+    echo "Sections that would run:"
+    local s
+    for s in "${SECTIONS[@]}"; do
+      section_enabled "$s" && echo "  - $s"
+    done
+    exit 0
+  fi
+
+  # Tee everything to a log file for post-mortem debugging. The terminal keeps
+  # colour; the log has ANSI colour codes stripped so it stays greppable.
   mkdir -p "$(dirname "$LOG_FILE")"
-  exec > >(tee -a "$LOG_FILE") 2>&1
+  exec > >(tee >(sed -u 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
 
   trap cleanup EXIT INT TERM
 
@@ -637,16 +762,22 @@ main() {
   setup_terminal
   banner
 
-  local sections=(
-    essentials dev security firefox brave
-    gnome theme hebrew extensions
-    zsh
-    pentest metasploit burp wordlists payloads
-    ssh
-  )
-  local s
-  for s in "${sections[@]}"; do
-    section_enabled "$s" && "section_$s"
+  local -a FAILED_SECTIONS=()
+  local s rc
+  for s in "${SECTIONS[@]}"; do
+    section_enabled "$s" || continue
+    # Best-effort: isolate each section in a subshell so one failure — e.g.
+    # Docker's codename-pinned APT repo or the Mozilla PPA not yet published for
+    # a brand-new Ubuntu release — doesn't abort the whole run. `set -e` still
+    # applies inside the subshell, so a section still stops at its first real error.
+    set +e
+    ( set -e; "section_$s" )
+    rc=$?
+    set -e
+    if (( rc != 0 )); then
+      warn "Section '$s' did not finish cleanly (exit $rc); continuing."
+      FAILED_SECTIONS+=("$s")
+    fi
   done
 
   apply_endstate_terminal
@@ -659,12 +790,18 @@ main() {
   clear
   echo -e "\e[1;32m"
   figlet "All done!" 2>/dev/null || echo "All done!"
+  echo -e "\e[0m"
+  if (( ${#FAILED_SECTIONS[@]} )); then
+    warn "These sections reported errors (see $LOG_FILE): ${FAILED_SECTIONS[*]}"
+  fi
   if [[ -d "$REAL_HOME/payloads" && -d "$REAL_HOME/wordlists" ]]; then
-    echo -e "\e[1;34m[+] Payloads and Wordlists in $REAL_HOME"
+    echo -e "\e[1;34m[+] Payloads and Wordlists in $REAL_HOME\e[0m"
   fi
   echo
+  echo "If you installed the Dev/Pentest stacks, log out and back in so the new"
+  echo "group memberships (docker, kvm, libvirt, wireshark) and PATH take effect."
+  echo
   echo "It's time to logout/login ☺"
-  echo -e "\e[0m"
   echo
 
   if ask_yes "Logout now?"; then

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# fast_ubuntu — opinionated post-install setup for Ubuntu (GNOME).
+# Power_Ubuntu — opinionated post-install setup for Ubuntu (GNOME).
 # Source for the compiled `Fast` binary.
 #
 # Usage:
@@ -18,12 +18,17 @@ set -Eeuo pipefail
 # -----------------------------------------------------------------------------
 # Constants
 # -----------------------------------------------------------------------------
-readonly P10K_URL='https://raw.githubusercontent.com/NVainer/OS_Ready/refs/heads/main/fast_ubuntu/my_p10k.zsh'
-readonly LOG_FILE="${HOME}/fast_ubuntu.log"
+readonly P10K_URL='https://raw.githubusercontent.com/NVainer/OS_Ready/refs/heads/main/Power_Ubuntu/my_p10k.zsh'
+readonly LOG_FILE="${HOME}/power_ubuntu.log"
 readonly REAL_USER="${SUDO_USER:-$USER}"
 REAL_HOME="$(getent passwd "$REAL_USER" 2>/dev/null | cut -d: -f6)"
 [[ -z "$REAL_HOME" ]] && REAL_HOME="$HOME"
 readonly REAL_HOME
+readonly VERSION='1.0.0'
+
+# Sections to run, in order. Single source of truth shared by the main loop,
+# the usage text, and --list-sections.
+SECTIONS=(essentials dev security autoupdates brave gnome theme hebrew zsh ssh)
 
 GREEN='\033[0;32m'
 YELLOW='\033[0;33m'
@@ -35,6 +40,7 @@ FULL_INSTALL=false
 ASSUME_YES=false
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
+DRY_RUN=false
 TERM_CUSTOMIZED=false
 PROFILE_PATH=""
 SUDO_KEEPALIVE_PID=""
@@ -73,17 +79,20 @@ section_enabled() {
 # -----------------------------------------------------------------------------
 usage() {
   cat <<EOF
-fast_ubuntu — opinionated Ubuntu post-install setup
+Power_Ubuntu — opinionated Ubuntu post-install setup  (v${VERSION})
 
 Usage: $0 [options]
 
   --full              install everything, skip prompts
   --yes, -y           accept all y/n prompts
   --only=A,B,C        run only listed sections
-  --skip=A,B,C        skip listed sections
+  --skip=A,B,C        run all sections except these
+  --dry-run           print the sections that would run, then exit
+  --list-sections     print every section name, then exit
+  --version, -V       print version and exit
   --help, -h          show this
 
-Sections: essentials dev security brave gnome theme hebrew zsh ssh
+Sections: ${SECTIONS[*]}
 EOF
 }
 
@@ -91,12 +100,15 @@ parse_args() {
   local arg
   for arg in "$@"; do
     case "$arg" in
-      --full)      FULL_INSTALL=true ;;
-      --yes|-y)    ASSUME_YES=true ;;
-      --only=*)    ONLY_SECTIONS="${arg#--only=}" ;;
-      --skip=*)    SKIP_SECTIONS="${arg#--skip=}" ;;
-      --help|-h)   usage; exit 0 ;;
-      *)           err "Unknown argument: $arg"; usage; exit 2 ;;
+      --full)          FULL_INSTALL=true ;;
+      --yes|-y)        ASSUME_YES=true ;;
+      --only=*)        ONLY_SECTIONS="${arg#--only=}" ;;
+      --skip=*)        SKIP_SECTIONS="${arg#--skip=}" ;;
+      --dry-run)       DRY_RUN=true ;;
+      --list-sections) printf '%s\n' "${SECTIONS[@]}"; exit 0 ;;
+      --version|-V)    echo "$VERSION"; exit 0 ;;
+      --help|-h)       usage; exit 0 ;;
+      *)               err "Unknown argument: $arg"; usage; exit 2 ;;
     esac
   done
 }
@@ -113,8 +125,11 @@ preflight() {
     warn "This script is tuned for Ubuntu and may misbehave elsewhere."
     ask_yes "Continue anyway?" || exit 1
   fi
+  # ICMP first (fast); fall back to HTTPS since many networks filter ping.
   if ! ping -c1 -W2 archive.ubuntu.com >/dev/null 2>&1 \
-     && ! ping -c1 -W2 8.8.8.8         >/dev/null 2>&1; then
+     && ! ping -c1 -W2 8.8.8.8         >/dev/null 2>&1 \
+     && ! { command -v curl >/dev/null 2>&1 \
+            && curl -fsS --max-time 5 -o /dev/null https://archive.ubuntu.com; }; then
     err "No network connectivity."
     exit 1
   fi
@@ -241,6 +256,20 @@ BANNER
 apt_update()  { sudo apt-get update -qq; }
 apt_install() { sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q "$@"; }
 
+# Install only the packages that actually exist in the configured repos, so a
+# single name that's missing on a given Ubuntu release doesn't fail the batch.
+install_available() {
+  local pkgs=() p
+  for p in "$@"; do
+    if apt-cache show "$p" >/dev/null 2>&1; then
+      pkgs+=("$p")
+    else
+      warn "Package not in repos, skipping: $p"
+    fi
+  done
+  (( ${#pkgs[@]} )) && apt_install "${pkgs[@]}"
+}
+
 # -----------------------------------------------------------------------------
 # Helpers used by multiple sections
 # -----------------------------------------------------------------------------
@@ -286,6 +315,17 @@ EOF
     gnome-tweaks gnome-shell-extensions \
     yaru-theme-gtk yaru-theme-icon \
     ffmpeg
+
+  log "Installing CLI quality-of-life tools..."
+  install_available \
+    tmux ripgrep fd-find bat jq btop tree ncdu \
+    pipx python3-venv
+
+  # Ubuntu ships a couple of these under alternate binary names — add the
+  # familiar names to ~/.local/bin so `bat` and `fd` just work.
+  mkdir -p "$REAL_HOME/.local/bin"
+  [[ -x /usr/bin/batcat ]] && ln -sf /usr/bin/batcat "$REAL_HOME/.local/bin/bat"
+  [[ -x /usr/bin/fdfind ]] && ln -sf /usr/bin/fdfind "$REAL_HOME/.local/bin/fd"
 
   if ! flatpak remote-list --columns=name 2>/dev/null | grep -qx 'flathub'; then
     log "Adding Flathub remote..."
@@ -336,6 +376,17 @@ section_security() {
   fi
 }
 
+section_autoupdates() {
+  ask_yes "Enable automatic security updates (unattended-upgrades)?" || return 0
+  log "Enabling unattended-upgrades..."
+  apt_install unattended-upgrades
+  sudo tee /etc/apt/apt.conf.d/20auto-upgrades >/dev/null <<'EOF'
+APT::Periodic::Update-Package-Lists "1";
+APT::Periodic::Unattended-Upgrade "1";
+EOF
+  sudo systemctl enable --now unattended-upgrades 2>/dev/null || true
+}
+
 section_brave() {
   ask_yes "Replace Firefox with Brave?" || return 0
 
@@ -359,7 +410,7 @@ section_gnome() {
   ask_yes 'Apply GNOME tweaks (dark mode, dock at bottom, sane Nautilus sort)?' || return 0
   log "Tweaking GNOME..."
 
-  gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'
+  gsettings set org.gnome.desktop.interface color-scheme 'prefer-dark'                || true
   gsettings set org.gnome.shell.extensions.ding show-home false                       || true
   gsettings set org.gnome.shell.extensions.dash-to-dock dock-position 'BOTTOM'        || true
   gsettings set org.gnome.shell.extensions.dash-to-dock dock-fixed false              || true
@@ -386,16 +437,16 @@ section_theme() {
 section_hebrew() {
   ask_yes 'Add Hebrew (IL) keyboard layout with Alt+Shift toggle?' || return 0
   gsettings set org.gnome.desktop.input-sources xkb-options \
-    "['grp:alt_shift_toggle', 'lv3:ralt_switch']"
+    "['grp:alt_shift_toggle', 'lv3:ralt_switch']" || true
   gsettings set org.gnome.desktop.input-sources sources \
-    "[('xkb', 'us'), ('xkb', 'il')]"
+    "[('xkb', 'us'), ('xkb', 'il')]" || true
 }
 
 section_zsh() {
   ask_yes 'Install ZSH + Oh-My-Zsh + Powerlevel10k?' || return 0
 
   log "Installing zsh..."
-  apt_install zsh zsh-common zsh-doc
+  apt_install zsh zsh-common
   sudo chsh -s "$(command -v zsh)" "$REAL_USER"
 
   if [[ ! -d "$REAL_HOME/.oh-my-zsh" ]]; then
@@ -415,13 +466,17 @@ section_zsh() {
   clone_if_missing https://github.com/zsh-users/zsh-autosuggestions.git      "$zsh_custom/plugins/zsh-autosuggestions"
   clone_if_missing https://github.com/zsh-users/zsh-syntax-highlighting.git  "$zsh_custom/plugins/zsh-syntax-highlighting"
 
-  cp "$REAL_HOME/.zshrc" "$REAL_HOME/.zshrc.bak.$(date +%s)"
-  sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|'                 "$REAL_HOME/.zshrc"
-  sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' "$REAL_HOME/.zshrc"
+  if [[ -f "$REAL_HOME/.zshrc" ]]; then
+    cp "$REAL_HOME/.zshrc" "$REAL_HOME/.zshrc.bak.$(date +%s)"
+    sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|'                 "$REAL_HOME/.zshrc"
+    sed -i 's/^plugins=.*/plugins=(git zsh-autosuggestions zsh-syntax-highlighting)/' "$REAL_HOME/.zshrc"
+  else
+    warn "~/.zshrc not found (Oh-My-Zsh may not have created it); skipping theme/plugin rewrite."
+  fi
 
   curl -fsSL "$P10K_URL" -o "$REAL_HOME/.p10k.zsh"
 
-  if ! grep -q 'POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD' "$REAL_HOME/.zshrc"; then
+  if [[ -f "$REAL_HOME/.zshrc" ]] && ! grep -q 'POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD' "$REAL_HOME/.zshrc"; then
     cat >> "$REAL_HOME/.zshrc" <<'EOF'
 POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=true
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
@@ -465,9 +520,20 @@ section_ssh() {
 main() {
   parse_args "$@"
 
-  # Tee everything to a log file for post-mortem debugging.
+  # Show which sections would run, then exit — makes no changes.
+  if $DRY_RUN; then
+    echo "Sections that would run:"
+    local s
+    for s in "${SECTIONS[@]}"; do
+      section_enabled "$s" && echo "  - $s"
+    done
+    exit 0
+  fi
+
+  # Tee everything to a log file for post-mortem debugging. The terminal keeps
+  # colour; the log has ANSI colour codes stripped so it stays greppable.
   mkdir -p "$(dirname "$LOG_FILE")"
-  exec > >(tee -a "$LOG_FILE") 2>&1
+  exec > >(tee >(sed -u 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
 
   trap cleanup EXIT INT TERM
 
@@ -484,10 +550,22 @@ main() {
   setup_terminal
   banner
 
-  local sections=(essentials dev security brave gnome theme hebrew zsh ssh)
-  local s
-  for s in "${sections[@]}"; do
-    section_enabled "$s" && "section_$s"
+  local -a FAILED_SECTIONS=()
+  local s rc
+  for s in "${SECTIONS[@]}"; do
+    section_enabled "$s" || continue
+    # Best-effort: isolate each section in a subshell so one failure — e.g.
+    # Docker's codename-pinned APT repo not yet published for a brand-new Ubuntu
+    # release — doesn't abort the whole run. `set -e` still applies inside the
+    # subshell, so a section still stops at its first real error.
+    set +e
+    ( set -e; "section_$s" )
+    rc=$?
+    set -e
+    if (( rc != 0 )); then
+      warn "Section '$s' did not finish cleanly (exit $rc); continuing."
+      FAILED_SECTIONS+=("$s")
+    fi
   done
 
   apply_endstate_terminal
@@ -501,9 +579,15 @@ main() {
   clear
   echo -e "\e[1;32m"
   figlet "All done!" 2>/dev/null || echo "All done!"
+  echo -e "\e[0m"
+  if (( ${#FAILED_SECTIONS[@]} )); then
+    warn "These sections reported errors (see $LOG_FILE): ${FAILED_SECTIONS[*]}"
+  fi
+  echo
+  echo "If you installed the Dev stack, log out and back in so the new group"
+  echo "memberships (docker, kvm, libvirt) take effect."
   echo
   echo "It's time to logout/login ☺"
-  echo -e "\e[0m"
   echo
 
   if ask_yes "Logout now?"; then
