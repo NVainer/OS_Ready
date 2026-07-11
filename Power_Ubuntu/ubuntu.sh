@@ -209,11 +209,15 @@ setup_terminal() {
     ORIG_TERM[$key]=$(gsettings get "$PROFILE_PATH" "$key" 2>/dev/null) || return 0
   done
 
+  # Apply the clean end-state look up front so the whole run looks nice:
+  # MesloLGS NF, near-black background, and the "Linux" 16-colour palette.
   gsettings set "$PROFILE_PATH" use-theme-colors false
-  gsettings set "$PROFILE_PATH" background-color '#000000'
-  gsettings set "$PROFILE_PATH" foreground-color '#3CFF2D'
-  gsettings set "$PROFILE_PATH" font 'Monospace 16'
-  gsettings set "$PROFILE_PATH" use-system-font false
+  gsettings set "$PROFILE_PATH" use-system-font  false
+  gsettings set "$PROFILE_PATH" font 'MesloLGS NF 12'
+  gsettings set "$PROFILE_PATH" background-color '#0C0C0C'
+  gsettings set "$PROFILE_PATH" foreground-color '#D3D3D3'
+  gsettings set "$PROFILE_PATH" palette \
+    "['#000000', '#AA0000', '#00AA00', '#AA5500', '#0000AA', '#AA00AA', '#00AAAA', '#AAAAAA', '#555555', '#FF5555', '#55FF55', '#FFFF55', '#5555FF', '#FF55FF', '#55FFFF', '#FFFFFF']"
   TERM_CUSTOMIZED=true
 
   # rows=28, cols=105
@@ -420,6 +424,13 @@ _dev_virt() {
     virt-manager swtpm wl-clipboard
   sudo usermod -aG libvirt "$REAL_USER" || true
   sudo usermod -aG kvm     "$REAL_USER" || true
+  # Start the libvirt daemon (monolithic or the newer modular one) and autostart
+  # the default NAT network. virt-manager can only reach qemu:///system once you
+  # re-login so the 'libvirt' group applies to your session.
+  sudo systemctl enable --now libvirtd 2>/dev/null \
+    || sudo systemctl enable --now virtqemud.socket 2>/dev/null || true
+  sudo virsh net-autostart default 2>/dev/null || true
+  sudo virsh net-start     default 2>/dev/null || true
 }
 
 section_security() {
