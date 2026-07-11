@@ -212,19 +212,21 @@ setup_terminal() {
     printf '\e]11;#0C0C0C\a'
     local _i _pal=(000000 AA0000 00AA00 AA5500 0000AA AA00AA 00AAAA AAAAAA 555555 FF5555 55FF55 FFFF55 5555FF FF55FF 55FFFF FFFFFF)
     for _i in "${!_pal[@]}"; do printf '\e]4;%d;#%s\a' "$_i" "${_pal[$_i]}"; done
-    printf '\e[8;28;105t'
+    printf '\e[8;44;150t'
   } > /dev/tty 2>/dev/null || true
 
   command -v gsettings >/dev/null 2>&1 || return 0
 
-  # Ptyxis (GNOME's GTK4 terminal, Ubuntu 26.04's default): dark mode, Meslo
-  # font, and the Linux palette. Its colours live per-profile. No-op elsewhere.
+  # Ptyxis (GNOME's GTK4 terminal, Ubuntu 26.04's default): dark mode, a bigger
+  # default window, and the Linux palette. Colours live per-profile; the Meslo
+  # font is set later (apply_endstate) once the zsh section has installed it.
   if gsettings list-schemas 2>/dev/null | grep -qx org.gnome.Ptyxis; then
     local _pu
     _pu=$(gsettings get org.gnome.Ptyxis default-profile-uuid 2>/dev/null | tr -d "'")
-    gsettings set org.gnome.Ptyxis interface-style 'dark'     || true
-    gsettings set org.gnome.Ptyxis use-system-font  false     || true
-    gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 12' || true
+    gsettings set org.gnome.Ptyxis interface-style 'dark' || true
+    gsettings set org.gnome.Ptyxis default-columns 150 || true
+    gsettings set org.gnome.Ptyxis default-rows    44  || true
+    gsettings set org.gnome.Ptyxis window-size "(uint32 150, uint32 44)" || true
     [[ -n "$_pu" ]] && gsettings set "org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/$_pu/" palette 'linux' || true
   fi
 
@@ -240,11 +242,9 @@ setup_terminal() {
     ORIG_TERM[$key]=$(gsettings get "$PROFILE_PATH" "$key" 2>/dev/null || echo '')
   done
 
-  # Apply the clean end-state look up front so the whole run looks nice:
-  # MesloLGS NF, near-black background, and the "Linux" 16-colour palette.
+  # Apply the clean look up front: near-black background + "Linux" 16-colour
+  # palette. The Meslo font is set later, once the zsh section installs it.
   gsettings set "$PROFILE_PATH" use-theme-colors false     || true
-  gsettings set "$PROFILE_PATH" use-system-font  false     || true
-  gsettings set "$PROFILE_PATH" font 'MesloLGS NF 12'      || true
   gsettings set "$PROFILE_PATH" background-color '#0C0C0C' || true
   gsettings set "$PROFILE_PATH" foreground-color '#D3D3D3' || true
   gsettings set "$PROFILE_PATH" palette \
@@ -263,17 +263,19 @@ restore_terminal_on_error() {
 }
 
 apply_endstate_terminal() {
-  $TERM_CUSTOMIZED || return 0
-  # Clean dark look: MesloLGS NF (installed for Powerlevel10k), a near-black
-  # background, and the classic "Linux" 16-colour palette.
-  gsettings set "$PROFILE_PATH" use-theme-colors false || true
-  gsettings set "$PROFILE_PATH" use-system-font  false || true
-  gsettings set "$PROFILE_PATH" font 'MesloLGS NF 12'  || true
-  gsettings set "$PROFILE_PATH" background-color '#0C0C0C' || true
-  gsettings set "$PROFILE_PATH" foreground-color '#D3D3D3' || true
-  gsettings set "$PROFILE_PATH" palette \
-    "['#000000', '#AA0000', '#00AA00', '#AA5500', '#0000AA', '#AA00AA', '#00AAAA', '#AAAAAA', '#555555', '#FF5555', '#55FF55', '#FFFF55', '#5555FF', '#FF55FF', '#55FFFF', '#FFFFFF']" || true
-  printf '\e[8;28;125t'
+  command -v gsettings >/dev/null 2>&1 || return 0
+  # The zsh section installs MesloLGS NF; set it as the terminal font now (needed
+  # for Powerlevel10k glyphs). Skipped if it isn't present, so we never leave a
+  # broken/badly-spaced fallback font behind.
+  fc-list 2>/dev/null | grep -qi 'MesloLGS NF' || return 0
+  if gsettings list-schemas 2>/dev/null | grep -qx org.gnome.Ptyxis; then
+    gsettings set org.gnome.Ptyxis use-system-font false      || true
+    gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 12' || true
+  fi
+  if [[ -n "${PROFILE_PATH:-}" ]]; then
+    gsettings set "$PROFILE_PATH" use-system-font false || true
+    gsettings set "$PROFILE_PATH" font 'MesloLGS NF 12' || true
+  fi
 }
 
 # -----------------------------------------------------------------------------
