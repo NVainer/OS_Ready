@@ -51,6 +51,9 @@ ASSUME_YES=false
 ONLY_SECTIONS=""
 SKIP_SECTIONS=""
 DRY_RUN=false
+UI=false                 # pinned-logo + progress-bar mode (unattended TTY runs)
+STAGE_TOTAL=0
+STAGE_DONE=0
 TERM_CUSTOMIZED=false
 PROFILE_PATH=""
 SUDO_KEEPALIVE_PID=""
@@ -62,6 +65,21 @@ declare -A ORIG_TERM=()
 log()  { echo -e "${GREEN}[+] $*${NC}"; }
 warn() { echo -e "${YELLOW}[!] $*${NC}" >&2; }
 err()  { echo -e "${RED}[x] $*${NC}" >&2; }
+
+# Redraw the single in-place progress bar on the real terminal (fd 3). No-op
+# unless the pinned-logo UI is active (verbose output goes to the log instead).
+progress() {
+  $UI || return 0
+  local label=${1:-} width=32 done=$STAGE_DONE total=$STAGE_TOTAL i fill pct bar=''
+  (( total > 0 )) || total=1
+  if (( done > total )); then done=$total; fi
+  pct=$(( done * 100 / total ))
+  fill=$(( done * width / total ))
+  for (( i = 0; i < width; i++ )); do
+    if (( i < fill )); then bar+='█'; else bar+='░'; fi
+  done
+  printf '\r\e[K  [%s] %3d%%  %s' "$bar" "$pct" "$label" >&3
+}
 
 # -----------------------------------------------------------------------------
 # Prompts
@@ -173,6 +191,7 @@ preflight() {
 
 cleanup() {
   local rc=$?
+  $UI && printf '\n' >&3 2>/dev/null || true
   if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
     kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
   fi
@@ -758,7 +777,9 @@ main() {
 
   # Tee everything to a log file for post-mortem debugging. The terminal keeps
   # colour; the log has ANSI colour codes stripped so it stays greppable.
+  # fd 3/4 keep a handle on the real terminal (progress bar + restore at the end).
   mkdir -p "$(dirname "$LOG_FILE")"
+  exec 3>&1 4>&2
   exec > >(tee >(sed -u 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE")) 2>&1
 
   trap cleanup EXIT INT TERM
@@ -774,10 +795,24 @@ main() {
   setup_terminal
   banner
 
+  # On an unattended run in a real terminal, pin the logo and show a single
+  # progress bar: route the verbose per-section output to the log only and draw
+  # the bar on the terminal (fd 3). Interactive runs keep the scrolling output.
+  if [[ -t 3 ]] && { $FULL_INSTALL || $ASSUME_YES; }; then
+    UI=true
+    local s0
+    for s0 in "${SECTIONS[@]}"; do
+      if section_enabled "$s0"; then STAGE_TOTAL=$(( STAGE_TOTAL + 1 )); fi
+    done
+    exec > >(sed -u 's/\x1b\[[0-9;]*m//g' >> "$LOG_FILE") 2>&1
+    printf '\n' >&3
+  fi
+
   local -a FAILED_SECTIONS=()
   local s rc
   for s in "${SECTIONS[@]}"; do
     section_enabled "$s" || continue
+    progress "$s"
     # Best-effort: isolate each section in a subshell so one failure — e.g.
     # Docker's codename-pinned APT repo or the Mozilla PPA not yet published for
     # a brand-new Ubuntu release — doesn't abort the whole run. `set -e` still
@@ -790,7 +825,15 @@ main() {
       warn "Section '$s' did not finish cleanly (exit $rc); continuing."
       FAILED_SECTIONS+=("$s")
     fi
+    STAGE_DONE=$(( STAGE_DONE + 1 ))
+    progress "$s"
   done
+
+  if $UI; then
+    progress "done"
+    printf '\n\n' >&3
+    exec 1>&3 2>&4                 # restore the terminal for the closing screen
+  fi
 
   apply_endstate_terminal
 
