@@ -618,6 +618,9 @@ main() {
 
   trap cleanup EXIT INT TERM
 
+  # Theme the terminal first thing, before the (possibly slow) preflight.
+  setup_terminal
+
   preflight
 
   # Only ask the top-level "Full install" question if the user didn't already
@@ -628,7 +631,6 @@ main() {
     [[ "${full_choice,,}" == "y" ]] && FULL_INSTALL=true
   fi
 
-  setup_terminal
   banner
 
   # On an unattended run in a real terminal, pin the logo and show a single

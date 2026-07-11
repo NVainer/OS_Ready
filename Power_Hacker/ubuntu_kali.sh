@@ -838,6 +838,9 @@ main() {
 
   trap cleanup EXIT INT TERM
 
+  # Theme the terminal first thing, before the (possibly slow) preflight.
+  setup_terminal
+
   preflight
 
   if ! $FULL_INSTALL && ! $ASSUME_YES && [[ -z "$ONLY_SECTIONS" ]]; then
@@ -846,7 +849,6 @@ main() {
     [[ "${full_choice,,}" == "y" ]] && FULL_INSTALL=true
   fi
 
-  setup_terminal
   banner
 
   # On an unattended run in a real terminal, pin the logo and show a single
