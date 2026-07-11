@@ -59,7 +59,8 @@ harness — elevation, connectivity, environment probe, prompts, reporting — w
 14. **Never** sleep / screen-off / hibernate (plugged in and on battery).
 15. **Turns off** Start/Explorer recommendations, recent files, Jump List items, and Start tips.
 16. **Do Not Disturb** on (silences notification banners).
-17. **Installs & activates Office** — waits for the download, mounts the image, runs `Setup.exe`, waits for it to finish, unmounts, then activates with MAS Ohook.
+17. **Removes app shortcuts from the desktop** (keeps Recycle Bin and any real files).
+18. **Installs & activates Office** — waits for the download, mounts the image, runs `Setup.exe`, waits for it to finish, unmounts, then activates with MAS Ohook.
 
 ## Notes
 

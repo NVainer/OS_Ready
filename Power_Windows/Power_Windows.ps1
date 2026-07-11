@@ -295,7 +295,7 @@ function Wait-OfficeInstall {
     # Give up after $StallMinutes with NO progress (installer idle and no new apps),
     # rather than blocking for a fixed hour. Keeps waiting while Office is installing.
     # $MaxMinutes is a hard safety cap.
-    param([int]$StallMinutes = 5, [int]$MaxMinutes = 40)
+    param([int]$StallMinutes = 8, [int]$MaxMinutes = 40)
     Write-Log "Waiting for Office to install (gives up after $StallMinutes min with no progress)..."
     $start = Get-Date
     $lastProgress = Get-Date
@@ -625,7 +625,7 @@ Import-Module posh-git
 Import-Module Terminal-Icons
 #f45873b3-b655-43a6-b217-97c00aa0db58 PowerToys CommandNotFound module
 
-Import-Module -Name Microsoft.WinGet.CommandNotFound
+Import-Module -Name Microsoft.WinGet.CommandNotFound -ErrorAction SilentlyContinue
 #f45873b3-b655-43a6-b217-97c00aa0db58
 '@
 
@@ -731,7 +731,7 @@ if ($useRes) {
     try { Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null } catch { Write-Warning "NuGet provider: $($_.Exception.Message)" }
     try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
 }
-foreach ($m in "PSReadLine","posh-git","Terminal-Icons") {
+foreach ($m in "PSReadLine","posh-git","Terminal-Icons","Microsoft.WinGet.CommandNotFound") {
     try {
         if ($useRes) { Install-PSResource -Name $m -TrustRepository -Scope CurrentUser -ErrorAction Stop }
         else { Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -ErrorAction Stop }
@@ -961,6 +961,21 @@ function Set-DoNotDisturb {
     } catch { Write-Log "Failed to set Do Not Disturb: $($_.Exception.Message)" ERR }
 }
 
+# --- Clean app shortcuts off the desktop (keep Recycle Bin and real files) ---
+function Remove-DesktopShortcuts {
+    if (-not (Confirm-Action "Delete the app shortcuts on the desktop (Recycle Bin and real files are kept)?")) { return }
+    try {
+        $count = 0
+        foreach ($d in @([Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('CommonDesktopDirectory'))) {
+            if (-not $d -or -not (Test-Path $d)) { continue }
+            Get-ChildItem -Path $d -File -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Extension -in '.lnk', '.url' } |
+                ForEach-Object { try { Remove-Item $_.FullName -Force -ErrorAction Stop; $count++ } catch { } }
+        }
+        Write-Log "Removed $count desktop shortcut$(if ($count -eq 1) { '' } else { 's' })." OK
+    } catch { Write-Log "Failed to clean desktop shortcuts: $($_.Exception.Message)" ERR }
+}
+
 # --- Restart Explorer so taskbar/Start changes take effect -------------------
 function Restart-Explorer {
     try {
@@ -1008,13 +1023,14 @@ Invoke-Step "13. Clean taskbar"             { Clear-TaskbarPins }
 Invoke-Step "14. Never sleep/screen/hibernate" { Set-NeverSleep }
 Invoke-Step "15. Start recommendations off" { Disable-StartRecommendations }
 Invoke-Step "16. Do Not Disturb"            { Set-DoNotDisturb }
+Invoke-Step "17. Clean desktop shortcuts"   { Remove-DesktopShortcuts }
 
 # Apply taskbar/Start tweaks (steps 10-13, 15) by restarting Explorer.
 if (Confirm-Action "Restart Explorer now to apply the taskbar/Start changes?") { Restart-Explorer }
 
 # Reconcile the background Office download, then mount / install / activate Office.
 Complete-OfficeDownload
-Invoke-Step "17. Install + activate Office" { Install-Office }
+Invoke-Step "18. Install + activate Office" { Install-Office }
 
 Write-Section "Done"
 Write-Log "Power_Windows finished." OK
