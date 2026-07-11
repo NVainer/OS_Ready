@@ -470,6 +470,22 @@ function Set-Languages {
 # =============================================================================
 #  6. Install apps (winget)
 # =============================================================================
+function Install-WingetApp {
+    param([string]$Id, [string]$Name)
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        if ($attempt -eq 1) { Write-Log "Installing $Name..." }
+        else { Write-Log "Retry $attempt/3 for $Name (transient failure)..." WARN; Start-Sleep -Seconds ($attempt * 5) }
+        try {
+            winget install --id $Id -e --source winget --accept-source-agreements --accept-package-agreements
+            $code = $LASTEXITCODE
+            if ($code -eq 0 -or $code -eq -1978335189) { Write-Log "$Name installed." OK; return $true }
+            Write-Log "${Name}: winget exit code $code" WARN
+        } catch { Write-Log "$Name error: $($_.Exception.Message)" ERR }
+    }
+    Write-Log "$Name did NOT install after 3 attempts." ERR
+    return $false
+}
+
 function Close-PowerToysWindow {
     # PowerToys pops its "Welcome" window open after install; close it during setup.
     $pt = Get-Process -Name 'PowerToys*' -ErrorAction SilentlyContinue
@@ -507,24 +523,7 @@ function Install-Apps {
             Write-Log "Skipped $name." WARN
             continue
         }
-        $ok = $false
-        for ($attempt = 1; $attempt -le 3 -and -not $ok; $attempt++) {
-            if ($attempt -eq 1) { Write-Log "Installing $name..." }
-            else { Write-Log "Retry $attempt/3 for $name (transient failure)..." WARN; Start-Sleep -Seconds ($attempt * 5) }
-            try {
-                winget install --id $id -e --source winget `
-                    --accept-source-agreements --accept-package-agreements
-                $code = $LASTEXITCODE
-                if ($code -eq 0 -or $code -eq -1978335189) {
-                    Write-Log "$name installed." OK; $ok = $true
-                } else {
-                    Write-Log "${name}: winget exit code $code" WARN
-                }
-            } catch {
-                Write-Log "$name error: $($_.Exception.Message)" ERR
-            }
-        }
-        if (-not $ok) { Write-Log "$name did NOT install after 3 attempts." ERR }
+        Install-WingetApp -Id $id -Name $name | Out-Null
     }
     Update-SessionPath
     $script:PwshExe = Get-PwshExe
@@ -730,14 +729,7 @@ function Set-PowerShell7Environment {
 
     # (a) oh-my-posh via winget, then refresh PATH so the child pwsh sees it.
     if (Confirm-Action "Install oh-my-posh (prompt theme engine)?") {
-        try {
-            winget install --id JanDeDobbeleer.OhMyPosh -e --source winget `
-                --accept-source-agreements --accept-package-agreements
-            Update-SessionPath
-            Write-Log "oh-my-posh installed." OK
-        } catch {
-            Write-Log "oh-my-posh install failed: $($_.Exception.Message)" ERR
-        }
+        if (Install-WingetApp -Id 'JanDeDobbeleer.OhMyPosh' -Name 'oh-my-posh') { Update-SessionPath }
     }
 
     # (b) Write the profile files into PowerShell 7's real profile folder.
