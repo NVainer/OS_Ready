@@ -10,13 +10,16 @@
 
 # one liner
 
-```bash
-curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
-```
-OR
+Ubuntu 26.04 ships `wget` (but not `curl`), so:
 
 ```bash
 wget https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
+```
+
+Prefer `curl`? Install it first with `sudo apt install -y curl`:
+
+```bash
+curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
 ```
 
 <br>

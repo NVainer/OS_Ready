@@ -135,10 +135,13 @@ preflight() {
     ask_yes "Continue anyway?" || exit 1
   fi
   # ICMP first (fast); fall back to HTTPS since many networks filter ping.
+  # Use whichever HTTP client exists — Ubuntu 26.04 ships wget but not curl.
   if ! ping -c1 -W2 archive.ubuntu.com >/dev/null 2>&1 \
      && ! ping -c1 -W2 8.8.8.8         >/dev/null 2>&1 \
      && ! { command -v curl >/dev/null 2>&1 \
-            && curl -fsS --max-time 5 -o /dev/null https://archive.ubuntu.com; }; then
+            && curl -fsS --max-time 5 -o /dev/null https://archive.ubuntu.com; } \
+     && ! { command -v wget >/dev/null 2>&1 \
+            && wget -q --timeout=5 -O /dev/null https://archive.ubuntu.com; }; then
     err "No network connectivity."
     exit 1
   fi
@@ -157,6 +160,15 @@ preflight() {
   sudo -v
   ( while true; do sudo -n true 2>/dev/null || exit; sleep 50; done ) &
   SUDO_KEEPALIVE_PID=$!
+
+  # Ubuntu 26.04 doesn't ship curl, but several sections use it. Install it up
+  # front so those work regardless of run order (e.g. --only=zsh skips essentials).
+  if ! command -v curl >/dev/null 2>&1; then
+    log "Installing curl (not shipped by default on this Ubuntu)..."
+    sudo apt-get install -y -q curl \
+      || { sudo apt-get update -qq && sudo apt-get install -y -q curl; } \
+      || warn "curl install failed; sections that need it may not work."
+  fi
 }
 
 cleanup() {

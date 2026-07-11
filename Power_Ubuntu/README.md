@@ -9,13 +9,16 @@
 
 # one liner
 
-```bash
-curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ubuntu.sh && ./ubuntu.sh
-```
-OR
+Ubuntu 26.04 ships `wget` (but not `curl`), so:
 
 ```bash
 wget https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ubuntu.sh && ./ubuntu.sh
+```
+
+Prefer `curl`? Install it first with `sudo apt install -y curl`:
+
+```bash
+curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ubuntu.sh && ./ubuntu.sh
 ```
 
 <br>
