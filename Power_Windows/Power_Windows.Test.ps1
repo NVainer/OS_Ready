@@ -219,7 +219,7 @@ function Write-TextFileNoBom {
 }
 
 function Get-PwshExe {
-    $cmd = Get-Command pwsh -ErrorAction SilentlyContinue
+    $cmd = Get-Command pwsh -ErrorAction Ignore
     if ($cmd) { return $cmd.Source }
     foreach ($p in @(
             "$env:ProgramFiles\PowerShell\7\pwsh.exe",
@@ -261,7 +261,9 @@ function Invoke-WindowsActivation {
     try {
         $mas = Invoke-RestMethod -Uri 'https://get.activated.win' -ErrorAction Stop
         # /HWID = main menu option 1 (permanent HWID activation), fully unattended.
+        $masErr = $global:Error.Count
         & ([scriptblock]::Create($mas)) /HWID
+        while ($global:Error.Count -gt $masErr) { $global:Error.RemoveAt(0) }  # drop MAS's benign registry-probe errors
         Write-Log "Activation routine finished (verify with 'slmgr /xpr')." OK
     } catch {
         Write-Log "Unattended activation failed: $($_.Exception.Message)" WARN
@@ -342,7 +344,7 @@ function Wait-OfficeInstall {
         $present = @()
         if ($office16) { foreach ($a in $core) { if (Test-Path (Join-Path $office16 $a)) { $present += $a } } }
         $count = $present.Count
-        $c2r = Get-Process -Name 'OfficeC2RClient' -ErrorAction SilentlyContinue
+        $c2r = Get-Process -Name 'OfficeC2RClient' -ErrorAction Ignore
         $cpu = if ($c2r) { [double](($c2r | Measure-Object -Property CPU -Sum).Sum) } else { 0.0 }
         $now = Get-Date
         # Busy = the click-to-run client is running AND burning CPU (actively installing).
@@ -402,9 +404,9 @@ function Install-Office {
         $installed = Wait-OfficeInstall
         if ($installed) {
             # Close the "You're all set!" dialog gracefully, then force any leftover UI.
-            Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+            Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction Ignore | ForEach-Object { $_.CloseMainWindow() | Out-Null }
             Start-Sleep -Seconds 2
-            Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction Ignore | Stop-Process -Force -ErrorAction Ignore
         }
     } catch {
         Write-Log "Office install failed: $($_.Exception.Message)" ERR
@@ -422,7 +424,9 @@ function Install-Office {
         if (Confirm-Action "Activate Office now (MAS Ohook)?") {
             Write-Log "Running MAS Ohook (Office activation)..."
             try {
+                $masErr = $global:Error.Count
                 & ([scriptblock]::Create((Invoke-RestMethod -Uri 'https://get.activated.win'))) /Ohook
+                while ($global:Error.Count -gt $masErr) { $global:Error.RemoveAt(0) }  # drop MAS's benign registry-probe errors
                 Write-Log "Office activation routine finished." OK
             } catch { Write-Log "Office activation failed: $($_.Exception.Message)" ERR }
         }
@@ -496,18 +500,24 @@ function Install-Apps {
             Write-Log "Skipped $name." WARN
             continue
         }
-        Write-Log "Installing $name..."
-        try {
-            winget install --id $id -e --source winget `
-                --accept-source-agreements --accept-package-agreements
-            if ($LASTEXITCODE -eq 0) {
-                Write-Log "$name installed." OK
-            } else {
-                Write-Log "${name}: winget exit code $LASTEXITCODE (may already be installed / needs restart)." WARN
+        $ok = $false
+        for ($attempt = 1; $attempt -le 3 -and -not $ok; $attempt++) {
+            if ($attempt -eq 1) { Write-Log "Installing $name..." }
+            else { Write-Log "Retry $attempt/3 for $name (transient failure)..." WARN; Start-Sleep -Seconds ($attempt * 5) }
+            try {
+                winget install --id $id -e --source winget `
+                    --accept-source-agreements --accept-package-agreements
+                $code = $LASTEXITCODE
+                if ($code -eq 0 -or $code -eq -1978335189) {
+                    Write-Log "$name installed." OK; $ok = $true
+                } else {
+                    Write-Log "${name}: winget exit code $code" WARN
+                }
+            } catch {
+                Write-Log "$name error: $($_.Exception.Message)" ERR
             }
-        } catch {
-            Write-Log "$name failed: $($_.Exception.Message)" ERR
         }
+        if (-not $ok) { Write-Log "$name did NOT install after 3 attempts." ERR }
     }
     Update-SessionPath
     $script:PwshExe = Get-PwshExe
@@ -894,10 +904,11 @@ function Set-StartFolders {
 # --- 12. Remove the Widgets button (weather/news, taskbar left) ---------------
 function Disable-WidgetsButton {
     if (-not (Confirm-Action "Remove the Widgets (weather & news) button from the taskbar?")) { return }
-    try {
-        Set-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' -Name 'TaskbarDa' -Value 0 -Force
-        Write-Log "Widgets button removed." OK
-    } catch { Write-Log "Failed to remove Widgets: $($_.Exception.Message)" ERR }
+    # Written via reg.exe: on some builds the provider throws UnauthorizedAccess on this
+    # specific value, and reg.exe (a native process) both avoids that and leaves $Error clean.
+    reg.exe add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' /v TaskbarDa /t REG_DWORD /d 0 /f > $null 2>&1
+    if ($LASTEXITCODE -eq 0) { Write-Log "Widgets button removed." OK }
+    else { Write-Log "Could not remove Widgets button (reg exit $LASTEXITCODE)." ERR }
 }
 
 # --- 13. Clean the taskbar: Task View, Search, Chat, Copilot, app pins --------
