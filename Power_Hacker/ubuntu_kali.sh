@@ -215,8 +215,20 @@ setup_terminal() {
     printf '\e[8;28;105t'
   } > /dev/tty 2>/dev/null || true
 
-  # Persistent theming for GNOME Terminal via gsettings (a no-op elsewhere).
   command -v gsettings >/dev/null 2>&1 || return 0
+
+  # Ptyxis (GNOME's GTK4 terminal, Ubuntu 26.04's default): dark mode, Meslo
+  # font, and the Linux palette. Its colours live per-profile. No-op elsewhere.
+  if gsettings list-schemas 2>/dev/null | grep -qx org.gnome.Ptyxis; then
+    local _pu
+    _pu=$(gsettings get org.gnome.Ptyxis default-profile-uuid 2>/dev/null | tr -d "'")
+    gsettings set org.gnome.Ptyxis interface-style 'dark'     || true
+    gsettings set org.gnome.Ptyxis use-system-font  false     || true
+    gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 12' || true
+    [[ -n "$_pu" ]] && gsettings set "org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/$_pu/" palette 'linux' || true
+  fi
+
+  # Persistent theming for GNOME Terminal via gsettings (a no-op elsewhere).
   local profile_id
   profile_id=$(gsettings get org.gnome.Terminal.ProfilesList default 2>/dev/null | tr -d "'") || return 0
   [[ -z "$profile_id" ]] && return 0
