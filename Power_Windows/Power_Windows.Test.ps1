@@ -334,7 +334,8 @@ function Wait-OfficeInstall {
     )
     $core = @('WINWORD.EXE', 'EXCEL.EXE', 'POWERPNT.EXE', 'OUTLOOK.EXE')
     $maxSeen = 0
-    $stable = 0
+    $prevCpu = $null
+    $idle = 0
     while ($true) {
         Start-Sleep -Seconds 15
         $office16 = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
@@ -342,15 +343,21 @@ function Wait-OfficeInstall {
         if ($office16) { foreach ($a in $core) { if (Test-Path (Join-Path $office16 $a)) { $present += $a } } }
         $count = $present.Count
         $c2r = Get-Process -Name 'OfficeC2RClient' -ErrorAction SilentlyContinue
+        $cpu = if ($c2r) { [double](($c2r | Measure-Object -Property CPU -Sum).Sum) } else { 0.0 }
         $now = Get-Date
-        Write-Log "Office apps: $count/$($core.Count) [$($present -join ',')]; installer running: $([bool]$c2r)" DEBUG
-        if ($c2r -or $count -gt $maxSeen) { $lastProgress = $now; if ($count -gt $maxSeen) { $maxSeen = $count } }
-        if ($count -eq $core.Count -and -not $c2r) {
-            $stable++
-            if ($stable -ge 2) { Write-Log "Office installation complete." OK; return $true }
+        # Busy = the click-to-run client is running AND burning CPU (actively installing).
+        # When it sits on the "You're all set!" dialog it uses ~no CPU, so it counts as idle
+        # and we can finish and close it - even though the process is still alive.
+        $busy = ([bool]$c2r) -and ($null -eq $prevCpu -or ($cpu - $prevCpu) -ge 2)
+        Write-Log "Office apps: $count/$($core.Count) [$($present -join ',')]; installer busy: $busy" DEBUG
+        if ($busy -or $count -gt $maxSeen) { $lastProgress = $now; if ($count -gt $maxSeen) { $maxSeen = $count } }
+        if ($count -eq $core.Count -and -not $busy) {
+            $idle++
+            if ($idle -ge 2) { Write-Log "Office installation complete." OK; return $true }
         } else {
-            $stable = 0
+            $idle = 0
         }
+        $prevCpu = $cpu
         if (($now - $lastProgress).TotalMinutes -ge $StallMinutes) {
             Write-Log "No Office install progress for $StallMinutes min - giving up (Setup likely failed)." WARN
             return $false
@@ -393,8 +400,12 @@ function Install-Office {
         # Run from the image root so Setup.exe finds its Office\ payload via relative paths.
         Start-Process -FilePath $setup -WorkingDirectory "${drive}:\" | Out-Null
         $installed = Wait-OfficeInstall
-        # Close the "You're all set!" dialog / leftover setup UI once install is done.
-        if ($installed) { Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue }
+        if ($installed) {
+            # Close the "You're all set!" dialog gracefully, then force any leftover UI.
+            Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+            Start-Sleep -Seconds 2
+            Get-Process -Name 'OfficeC2RClient', 'Setup' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+        }
     } catch {
         Write-Log "Office install failed: $($_.Exception.Message)" ERR
     } finally {
