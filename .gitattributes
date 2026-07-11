@@ -1,9 +1,7 @@
-# Force LF for the shell scripts, zsh configs, and compiled launchers so they
-# run/parse on Linux regardless of core.autocrlf on the committer's machine.
-# Applies repo-wide, covering every project folder (Power_Ubuntu, Power_Hacker,
-# ...). my_p10k.zsh is served raw from GitHub and sourced by zsh, so it must be
-# LF too or the prompt inherits stray carriage returns.
-*.sh          text eol=lf
-*.zsh         text eol=lf
-Fast          text eol=lf
-ubuntu_kali   text eol=lf
+# Force LF for the shell scripts and zsh configs so they run/parse on Linux
+# regardless of core.autocrlf on the committer's machine. Applies repo-wide,
+# covering every project folder (Power_Ubuntu, Power_Hacker, ...). my_p10k.zsh is
+# served raw from GitHub and sourced by zsh, so it must be LF too or the prompt
+# inherits stray carriage returns.
+*.sh   text eol=lf
+*.zsh  text eol=lf

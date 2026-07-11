@@ -11,19 +11,19 @@
 # one liner
 
 ```bash
-curl -L -o Fast https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ./Fast && ./Fast
+curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
 ```
 OR
 
 ```bash
-wget -O Fast https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ./Fast && ./Fast
+wget https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
 ```
 
 <br>
 
 ## ⚙️ Options
 
-`Fast` is interactive by default. Flags:
+`./ubuntu_kali.sh` is interactive by default. Flags:
 
 | Flag | Effect |
 |------|--------|

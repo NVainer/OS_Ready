@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 #
 # Power_Ubuntu — opinionated post-install setup for Ubuntu (GNOME).
-# Source for the compiled `Fast` binary.
 #
 # Usage:
-#   ./Fast                       interactive, per-section prompts
-#   ./Fast --full                install everything, skip prompts
-#   ./Fast --yes                 accept all y/n prompts (alias of --full)
-#   ./Fast --only=dev,zsh        run only listed sections
-#   ./Fast --skip=ssh,hebrew     run all sections except these
-#   ./Fast --help
+#   ./ubuntu.sh                    interactive, per-section prompts
+#   ./ubuntu.sh --full             install everything, skip prompts
+#   ./ubuntu.sh --yes              accept all y/n prompts (alias of --full)
+#   ./ubuntu.sh --only=dev,zsh     run only listed sections
+#   ./ubuntu.sh --skip=ssh,hebrew  run all sections except these
+#   ./ubuntu.sh --dry-run          show what would run, then exit
+#   ./ubuntu.sh --help
 #
-# Sections: essentials dev security brave gnome theme hebrew zsh ssh
+# Sections: essentials dev security autoupdates brave gnome theme hebrew zsh ssh
 #
 set -Eeuo pipefail
 

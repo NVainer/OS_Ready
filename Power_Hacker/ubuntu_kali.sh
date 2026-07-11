@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
 #
 # Power_Hacker — turn a fresh Ubuntu GNOME install into a pentesting workstation.
-# Source for the compiled `ubuntu_kali` / `Fast` binary.
 #
 # Usage:
-#   ./ubuntu_kali                  interactive, per-section prompts
-#   ./ubuntu_kali --full           install everything, skip prompts
-#   ./ubuntu_kali --yes            accept all y/n prompts (alias of --full)
-#   ./ubuntu_kali --only=A,B,C     run only listed sections
-#   ./ubuntu_kali --skip=A,B,C     skip listed sections
-#   ./ubuntu_kali --help
+#   ./ubuntu_kali.sh               interactive, per-section prompts
+#   ./ubuntu_kali.sh --full        install everything, skip prompts
+#   ./ubuntu_kali.sh --yes         accept all y/n prompts (alias of --full)
+#   ./ubuntu_kali.sh --only=A,B,C  run only listed sections
+#   ./ubuntu_kali.sh --skip=A,B,C  run all sections except these
+#   ./ubuntu_kali.sh --dry-run     show what would run, then exit
+#   ./ubuntu_kali.sh --help
 #
 # Sections: essentials dev security firefox brave gnome theme hebrew extensions
 #           zsh pentest metasploit burp wordlists payloads ssh

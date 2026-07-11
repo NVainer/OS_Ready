@@ -10,19 +10,19 @@
 # one liner
 
 ```bash
-curl -L -o Fast https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ./Fast && ./Fast
+curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ubuntu.sh && ./ubuntu.sh
 ```
 OR
 
 ```bash
-wget -O Fast https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ./Fast && ./Fast
+wget https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Ubuntu/ubuntu.sh && chmod +x ubuntu.sh && ./ubuntu.sh
 ```
 
 <br>
 
 ## ⚙️ Options
 
-`Fast` is interactive by default. Flags:
+`./ubuntu.sh` is interactive by default. Flags:
 
 | Flag | Effect |
 |------|--------|
