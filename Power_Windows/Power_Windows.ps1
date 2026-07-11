@@ -208,6 +208,22 @@ function Test-Connectivity {
 # =============================================================================
 #  3. Activate Windows  (MAS - HWID / permanent)
 # =============================================================================
+function Get-MasScript {
+    # Download the MAS script with retry (get.activated.win occasionally fails DNS).
+    # Each failed attempt's transient error is dropped so it doesn't dirty the caller's step.
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        $before = $global:Error.Count
+        try {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            return (Invoke-RestMethod -Uri 'https://get.activated.win' -Verbose:$false -ErrorAction Stop)
+        } catch {
+            while ($global:Error.Count -gt $before) { $global:Error.RemoveAt(0) }
+            if ($attempt -lt 3) { Write-Log "Could not reach get.activated.win (attempt $attempt/3); retrying..." WARN; Start-Sleep -Seconds ($attempt * 5) }
+            else { throw "get.activated.win unreachable after 3 attempts: $($_.Exception.Message)" }
+        }
+    }
+}
+
 function Invoke-WindowsActivation {
     if (-not (Confirm-Action "Activate Windows now (MAS - HWID / permanent)?")) {
         Write-Log "Skipped Windows activation." WARN
@@ -215,17 +231,14 @@ function Invoke-WindowsActivation {
     }
     Write-Log "Running Microsoft Activation Scripts (HWID)..."
     try {
-        $mas = Invoke-RestMethod -Uri 'https://get.activated.win' -ErrorAction Stop
+        $mas = Get-MasScript
         # /HWID = main menu option 1 (permanent HWID activation), fully unattended.
         $masErr = $global:Error.Count
         & ([scriptblock]::Create($mas)) /HWID
         while ($global:Error.Count -gt $masErr) { $global:Error.RemoveAt(0) }  # drop MAS's benign registry-probe errors
         Write-Log "Activation routine finished (verify with 'slmgr /xpr')." OK
     } catch {
-        Write-Log "Unattended activation failed: $($_.Exception.Message)" WARN
-        Write-Log "Falling back to the interactive MAS menu (choose 1, then 1)..." INFO
-        try { Invoke-Expression (Invoke-RestMethod -Uri 'https://get.activated.win') }
-        catch { Write-Log "MAS could not be launched: $($_.Exception.Message)" ERR }
+        Write-Log "Windows activation failed: $($_.Exception.Message)" ERR
     }
 }
 
@@ -339,7 +352,9 @@ function Install-Office {
     $mounted = $false
     $installed = $false
     try {
-        Import-Module Storage -Verbose:$false -ErrorAction SilentlyContinue  # avoid a noisy verbose auto-import
+        $vp = $VerbosePreference; $VerbosePreference = 'SilentlyContinue'  # silence Storage's CDXML import dump
+        Import-Module Storage -ErrorAction SilentlyContinue
+        $VerbosePreference = $vp
         Write-Log "Mounting $($script:OfficeDest)..."
         Mount-DiskImage -ImagePath $script:OfficeDest -ErrorAction Stop | Out-Null
         $mounted = $true
@@ -380,8 +395,9 @@ function Install-Office {
         if (Confirm-Action "Activate Office now (MAS Ohook)?") {
             Write-Log "Running MAS Ohook (Office activation)..."
             try {
+                $mas = Get-MasScript
                 $masErr = $global:Error.Count
-                & ([scriptblock]::Create((Invoke-RestMethod -Uri 'https://get.activated.win'))) /Ohook
+                & ([scriptblock]::Create($mas)) /Ohook
                 while ($global:Error.Count -gt $masErr) { $global:Error.RemoveAt(0) }  # drop MAS's benign registry-probe errors
                 Write-Log "Office activation routine finished." OK
             } catch { Write-Log "Office activation failed: $($_.Exception.Message)" ERR }
