@@ -56,7 +56,7 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
         }
     }
     Write-Host "[*] Elevating to Administrator..." -ForegroundColor Cyan
-    $psArgs = '-NoProfile -ExecutionPolicy Bypass -NoExit -File "{0}"' -f $scriptPath
+    $psArgs = '-NoProfile -ExecutionPolicy Bypass -File "{0}"' -f $scriptPath
     if ($Auto) { $psArgs += ' -Auto' }
     # Prefer opening the elevated session as a Windows Terminal tab. Windows keeps
     # elevated tabs in their own WT window (separate from an unelevated one), so this
@@ -104,32 +104,27 @@ $script:LogFile       = $null
 #   ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Start' VisiblePlaces).VisiblePlaces | ForEach-Object { $_.ToString('X2') }) -join ''
 $script:StartFoldersHex = '86087352AA5143429F7B2776584659D4BC248A140CD68942A0806ED9BBA24882CED5342D5AFA434582F222E6EAF7773C2FB367E3DE895543BFCE61F37B18A9374AB0BD744AF9684F8BD64398071DA8BC'
 
-try {
-    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-    $script:LogFile = Join-Path $env:USERPROFILE "Power_Windows_$stamp.log"
-    Start-Transcript -Path $script:LogFile -Append -ErrorAction Stop | Out-Null
-} catch { }
+# Prod leaves no log file. Progress-bar state (see Show-Stage / Invoke-Step).
+$script:StageDone  = 0
+$script:StageTotal = 16
 
 # =============================================================================
 #  Helpers
 # =============================================================================
-function Write-Log {
-    param(
-        [Parameter(Mandatory)][string]$Message,
-        [ValidateSet('INFO', 'OK', 'WARN', 'ERR')][string]$Level = 'INFO'
-    )
-    switch ($Level) {
-        'OK'   { Write-Host "[+] $Message" -ForegroundColor Green }
-        'WARN' { Write-Host "[!] $Message" -ForegroundColor Yellow }
-        'ERR'  { Write-Host "[x] $Message" -ForegroundColor Red }
-        default { Write-Host "[*] $Message" -ForegroundColor Cyan }
-    }
-}
+function Write-Log    { param([string]$Message, [string]$Level = 'INFO') }   # prod: silent (progress bar only)
+function Write-Section { param([string]$Title) }                            # prod: silent
 
-function Write-Section {
-    param([string]$Title)
-    Write-Host ""
-    Write-Host ("===  $Title  ===") -ForegroundColor Magenta
+# Single in-place progress bar drawn in the scroll region below the pinned logo.
+function Show-Stage {
+    param([string]$Label = '', [double]$Extra = 0)
+    if (-not $script:StageTotal) { return }
+    $frac = [math]::Min(1.0, [math]::Max(0.0, ($script:StageDone + $Extra) / $script:StageTotal))
+    $w = 32; $fill = [int]($frac * $w)
+    $bar = ([string][char]0x2588 * $fill) + ([string][char]0x2591 * ($w - $fill))
+    try { $cw = [Console]::WindowWidth } catch { $cw = 100 }
+    $txt = "  [$bar] {0,3}%  {1}" -f [int]($frac * 100), $Label
+    if ($txt.Length -gt ($cw - 1)) { $txt = $txt.Substring(0, $cw - 1) }
+    try { [Console]::Write("`r" + $txt.PadRight($cw - 1)) } catch { }
 }
 
 function Confirm-Action {
@@ -156,9 +151,9 @@ function Confirm-Action {
 
 function Invoke-Step {
     param([string]$Title, [scriptblock]$Action)
-    Write-Section $Title
-    try { & $Action }
-    catch { Write-Log "Step '$Title' failed: $($_.Exception.Message)" ERR }
+    Show-Stage -Label ($Title -replace '^\d+\.\s*', '')
+    try { & $Action } catch { }
+    $script:StageDone++
 }
 
 function Update-SessionPath {
@@ -234,7 +229,7 @@ function Invoke-WindowsActivation {
         $mas = Get-MasScript
         # /HWID = main menu option 1 (permanent HWID activation), fully unattended.
         $masErr = $global:Error.Count
-        & ([scriptblock]::Create($mas)) /HWID
+        & ([scriptblock]::Create($mas)) /HWID *> $null
         while ($global:Error.Count -gt $masErr) { $global:Error.RemoveAt(0) }  # drop MAS's benign registry-probe errors
         Write-Log "Activation routine finished (verify with 'slmgr /xpr')." OK
     } catch {
@@ -307,7 +302,9 @@ function Wait-OfficeInstall {
     $maxSeen = 0
     $prevCpu = $null
     $idle = 0
+    $spin = '|/-\'; $spinI = 0
     while ($true) {
+        Show-Stage -Label ("Installing Office " + $spin[$spinI % 4]); $spinI++
         Start-Sleep -Seconds 15
         $office16 = $roots | Where-Object { Test-Path $_ } | Select-Object -First 1
         $present = @()
@@ -397,7 +394,7 @@ function Install-Office {
             try {
                 $mas = Get-MasScript
                 $masErr = $global:Error.Count
-                & ([scriptblock]::Create($mas)) /Ohook
+                & ([scriptblock]::Create($mas)) /Ohook *> $null
                 while ($global:Error.Count -gt $masErr) { $global:Error.RemoveAt(0) }  # drop MAS's benign registry-probe errors
                 Write-Log "Office activation routine finished." OK
             } catch { Write-Log "Office activation failed: $($_.Exception.Message)" ERR }
@@ -441,7 +438,7 @@ function Install-WingetApp {
         if ($attempt -eq 1) { Write-Log "Installing $Name..." }
         else { Write-Log "Retry $attempt/3 for $Name (transient failure)..." WARN; Start-Sleep -Seconds ($attempt * 5) }
         try {
-            winget install --id $Id -e --source winget --accept-source-agreements --accept-package-agreements
+            winget install --id $Id -e --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity *> $null
             $code = $LASTEXITCODE
             if ($code -eq 0 -or $code -eq -1978335189) { Write-Log "$Name installed." OK; return $true }
             Write-Log "${Name}: winget exit code $code" WARN
@@ -481,14 +478,12 @@ function Install-Apps {
         'VideoLAN.VLC'                 = 'VLC media player'
     }
 
-    Write-Log "Answer A at any prompt to install all remaining apps without asking again."
+    $appTotal = $apps.Count; $appIdx = 0
     foreach ($id in $apps.Keys) {
         $name = $apps[$id]
-        if (-not (Confirm-Action "Install $name  ($id)?" -AllowAll)) {
-            Write-Log "Skipped $name." WARN
-            continue
-        }
-        Install-WingetApp -Id $id -Name $name | Out-Null
+        Show-Stage -Label "Apps: $name" -Extra ($appIdx / $appTotal)
+        if (Confirm-Action "Install $name  ($id)?" -AllowAll) { Install-WingetApp -Id $id -Name $name | Out-Null }
+        $appIdx++
     }
     Update-SessionPath
     $script:PwshExe = Get-PwshExe
@@ -986,6 +981,22 @@ function Restart-Explorer {
     } catch { Write-Log "Could not restart Explorer: $($_.Exception.Message)" WARN }
 }
 
+# --- Remove the files this run created (prod leaves nothing behind) ----------
+function Remove-Leftovers {
+    $paths = @(
+        $script:OfficeDest,
+        (Join-Path $env:USERPROFILE 'Power_Windows_Start_backup.reg'),
+        (Join-Path $env:USERPROFILE 'Power_Windows_Taskband_backup.reg')
+    )
+    $wt = Get-WTSettingsPath
+    if ($wt) { $paths += "$wt.bak" }
+    foreach ($p in $paths) { if ($p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue } }
+    # The running temp script can't delete itself; hand off to a detached cmd.
+    if ($PSCommandPath -and $PSCommandPath -like "$env:TEMP\*") {
+        Start-Process cmd.exe -WindowStyle Hidden -ArgumentList '/c', "ping 127.0.0.1 -n 3 >nul & del /f /q `"$PSCommandPath`"" -ErrorAction SilentlyContinue
+    }
+}
+
 # =============================================================================
 #  Main
 # =============================================================================
@@ -1018,9 +1029,9 @@ if ($script:LogFile) { Write-Log "Logging to $($script:LogFile)" }
 # 2. Connectivity gate
 Write-Section "2. Internet connectivity"
 if (-not (Test-Connectivity)) {
-    Write-Log "No internet connection detected. Connect and re-run. Aborting." ERR
     [Console]::Write("$($script:esc)[r")   # release the fixed-logo scroll region
-    try { Stop-Transcript | Out-Null } catch { }
+    Write-Host "  No internet connection detected. Connect and re-run." -ForegroundColor Red
+    Start-Sleep -Seconds 4
     return
 }
 
@@ -1048,12 +1059,8 @@ if (Confirm-Action "Restart Explorer now to apply the taskbar/Start changes?") {
 Complete-OfficeDownload
 Invoke-Step "18. Install + activate Office" { Install-Office }
 
-Write-Section "Done"
-Write-Log "Power_Windows finished." OK
-Write-Log "Recommended: restart Windows Terminal (font/profile) and sign out/in or reboot (language)." INFO
-if ([string]::IsNullOrWhiteSpace($script:StartFoldersHex)) {
-    Write-Log "Start folder pins (step 11) were skipped - set `$script:StartFoldersHex to enable them (see the capture note at the top)." INFO
-}
-if ($script:LogFile) { Write-Log "Full log: $($script:LogFile)" INFO }
+$script:StageDone = $script:StageTotal
+Show-Stage -Label "Done"
+Remove-Leftovers
 [Console]::Write("$($script:esc)[r")   # release the fixed-logo scroll region
-try { Stop-Transcript | Out-Null } catch { }
+Start-Sleep -Seconds 4
