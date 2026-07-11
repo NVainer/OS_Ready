@@ -212,7 +212,7 @@ setup_terminal() {
   PROFILE_PATH="org.gnome.Terminal.Legacy.Profile:/org/gnome/terminal/legacy/profiles:/:${profile_id}/"
 
   local key
-  for key in background-color foreground-color font use-system-font use-theme-colors; do
+  for key in background-color foreground-color font use-system-font use-theme-colors palette; do
     ORIG_TERM[$key]=$(gsettings get "$PROFILE_PATH" "$key" 2>/dev/null) || return 0
   done
 
@@ -238,10 +238,15 @@ restore_terminal_on_error() {
 
 apply_endstate_terminal() {
   $TERM_CUSTOMIZED || return 0
-  gsettings set "$PROFILE_PATH" use-system-font true       || true
-  gsettings set "$PROFILE_PATH" use-theme-colors false     || true
-  gsettings set "$PROFILE_PATH" background-color '#150F1A' || true
+  # Clean dark look: MesloLGS NF (installed for Powerlevel10k), a near-black
+  # background, and the classic "Linux" 16-colour palette.
+  gsettings set "$PROFILE_PATH" use-theme-colors false || true
+  gsettings set "$PROFILE_PATH" use-system-font  false || true
+  gsettings set "$PROFILE_PATH" font 'MesloLGS NF 12'  || true
+  gsettings set "$PROFILE_PATH" background-color '#0C0C0C' || true
   gsettings set "$PROFILE_PATH" foreground-color '#D3D3D3' || true
+  gsettings set "$PROFILE_PATH" palette \
+    "['#000000', '#AA0000', '#00AA00', '#AA5500', '#0000AA', '#AA00AA', '#00AAAA', '#AAAAAA', '#555555', '#FF5555', '#55FF55', '#FFFF55', '#5555FF', '#FF55FF', '#55FFFF', '#FFFFFF']" || true
   printf '\e[8;28;125t'
 }
 
@@ -345,9 +350,24 @@ EOF
   fi
 }
 
-section_dev() {
-  ask_yes "Install Dev stack (Docker, KVM/QEMU, Go, VS Code, Sublime Text)?" || return 0
+# Run an independent install step so one failure (e.g. Docker's repo) doesn't
+# skip the rest of the section. `set -e` still applies inside the sub-shell.
+dev_step() {
+  local label=$1; shift
+  set +e; ( set -e; "$@" ); local rc=$?; set -e
+  if (( rc != 0 )); then warn "Dev: ${label} step failed (exit $rc); continuing."; fi
+}
 
+section_dev() {
+  ask_yes "Install Dev stack (Docker, KVM/QEMU + virt-manager, Go, VS Code, Sublime Text)?" || return 0
+  dev_step "Docker"            _dev_docker
+  dev_step "KVM/virt-manager"  _dev_virt
+  dev_step "VS Code"           _dev_vscode
+  dev_step "Sublime Text"      _dev_sublime
+  pin_to_favorites org.gnome.Terminal.desktop
+}
+
+_dev_docker() {
   log "Installing Docker..."
   sudo install -m 0755 -d /etc/apt/keyrings
   sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
@@ -356,6 +376,13 @@ section_dev() {
 
   local codename
   codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+  # Docker's repo is codename-pinned; if it hasn't published for a brand-new
+  # release yet, fall back to the newest LTS it does support so Docker still
+  # installs (its packages are codename-agnostic in practice).
+  if ! curl -fsIL "https://download.docker.com/linux/ubuntu/dists/${codename}/Release" >/dev/null 2>&1; then
+    warn "Docker has no repo for '${codename}' yet; using '${DOCKER_FALLBACK:-noble}'."
+    codename=${DOCKER_FALLBACK:-noble}
+  fi
   echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu ${codename} stable" \
     | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
@@ -364,20 +391,28 @@ section_dev() {
     docker-ce docker-ce-cli containerd.io \
     docker-buildx-plugin docker-compose-plugin
   sudo usermod -aG docker "$REAL_USER"
+}
 
+_dev_virt() {
   log "Installing KVM/QEMU/virt-manager + Go..."
-  apt_install \
+  # Filtered install so a package that's dropped on a newer release (e.g.
+  # bridge-utils) can't take virt-manager down with it.
+  install_available \
     golang \
     qemu-system-x86 qemu-utils \
     libvirt-daemon-system libvirt-clients bridge-utils \
     virt-manager swtpm wl-clipboard
-  sudo usermod -aG libvirt "$REAL_USER"
-  sudo usermod -aG kvm     "$REAL_USER"
+  sudo usermod -aG libvirt "$REAL_USER" || true
+  sudo usermod -aG kvm     "$REAL_USER" || true
+}
 
+_dev_vscode() {
   log "Installing VS Code (snap)..."
-  sudo snap install --classic code || warn "VS Code install failed."
+  sudo snap install --classic code
   pin_to_favorites code_code.desktop
+}
 
+_dev_sublime() {
   log "Installing Sublime Text..."
   wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg \
     | sudo tee /etc/apt/keyrings/sublimehq-pub.asc > /dev/null
@@ -387,8 +422,6 @@ section_dev() {
   apt_install sublime-text
   pin_to_favorites sublime_text.desktop
   xdg-mime default sublime_text.desktop text/plain || true
-
-  pin_to_favorites org.gnome.Terminal.desktop
 }
 
 section_security() {
@@ -398,7 +431,7 @@ section_security() {
   # pentest box a default deny-incoming policy blocks your own reverse shells and
   # listeners. fail2ban is skipped too — it guards SSH, which this profile
   # disables (section_ssh). Enable either by hand if an engagement calls for it.
-  apt_install gufw apparmor-utils keepassxc
+  install_available gufw apparmor-utils keepassxc
 
   if systemctl list-unit-files | grep -q '^apache2.service'; then
     sudo systemctl disable apache2 || true
@@ -859,8 +892,14 @@ main() {
   echo "It's time to logout/login ☺"
   echo
 
-  if ask_yes "Logout now?"; then
-    gnome-session-quit --logout --no-prompt
+  # Never auto-logout — only offer it when actually interactive. (An unattended
+  # --full run would otherwise sign you straight out.)
+  if [[ -t 0 ]] && ! $FULL_INSTALL && ! $ASSUME_YES; then
+    local logout_now
+    read -r -p "Log out now to apply everything? (y/n): " logout_now
+    if [[ "${logout_now,,}" == "y" ]]; then
+      gnome-session-quit --logout --no-prompt
+    fi
   fi
 }
 
