@@ -102,7 +102,7 @@ $script:LogFile       = $null
 #   Settings > Personalization > Start > Folders  ->  tick Explorer/Documents/Downloads/etc,
 #   then run this and paste the hex string below (empty = leave Start folders unchanged):
 #   ((Get-ItemProperty 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Start' VisiblePlaces).VisiblePlaces | ForEach-Object { $_.ToString('X2') }) -join ''
-$script:StartFoldersHex = ''
+$script:StartFoldersHex = '86087352AA5143429F7B2776584659D4BC248A140CD68942A0806ED9BBA24882CED5342D5AFA434582F222E6EAF7773C2FB367E3DE895543BFCE61F37B18A9374AB0BD744AF9684F8BD64398071DA8BC'
 
 try {
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
