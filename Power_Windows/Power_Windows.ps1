@@ -339,6 +339,7 @@ function Install-Office {
     $mounted = $false
     $installed = $false
     try {
+        Import-Module Storage -Verbose:$false -ErrorAction SilentlyContinue  # avoid a noisy verbose auto-import
         Write-Log "Mounting $($script:OfficeDest)..."
         Mount-DiskImage -ImagePath $script:OfficeDest -ErrorAction Stop | Out-Null
         $mounted = $true
@@ -408,7 +409,7 @@ function Set-Languages {
         foreach ($obj in $cur) {
             if (@('en-US', 'he') -notcontains $obj.LanguageTag) { $ordered += $obj }
         }
-        Set-WinUserLanguageList -LanguageList $ordered -Force
+        Set-WinUserLanguageList -LanguageList $ordered -Force -WarningAction SilentlyContinue
         Write-Log "Language list set: $($ordered.LanguageTag -join ', ')" OK
     } catch {
         Write-Log "Failed to set languages: $($_.Exception.Message)" ERR
@@ -707,11 +708,19 @@ function Set-PowerShell7Environment {
         $block = @'
 $ErrorActionPreference = "Continue"
 try { Set-ExecutionPolicy -Scope CurrentUser RemoteSigned -Force } catch {}
-try { Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -ErrorAction Stop | Out-Null } catch { Write-Warning "NuGet provider: $($_.Exception.Message)" }
-try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
+$useRes = [bool](Get-Command Install-PSResource -ErrorAction Ignore)
+if ($useRes) {
+    try { Set-PSResourceRepository -Name PSGallery -Trusted -ErrorAction Stop } catch {}
+} else {
+    try { Install-PackageProvider -Name NuGet -Force -ErrorAction Stop | Out-Null } catch { Write-Warning "NuGet provider: $($_.Exception.Message)" }
+    try { Set-PSRepository -Name PSGallery -InstallationPolicy Trusted -ErrorAction Stop } catch {}
+}
 foreach ($m in "PSReadLine","posh-git","Terminal-Icons") {
-    try { Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -ErrorAction Stop; Write-Host "[+] module installed: $m" }
-    catch { Write-Warning "module ${m}: $($_.Exception.Message)" }
+    try {
+        if ($useRes) { Install-PSResource -Name $m -TrustRepository -Scope CurrentUser -ErrorAction Stop }
+        else { Install-Module -Name $m -Scope CurrentUser -Force -AllowClobber -SkipPublisherCheck -ErrorAction Stop }
+        Write-Host "[+] module installed: $m"
+    } catch { Write-Warning "module ${m}: $($_.Exception.Message)" }
 }
 $omp = (Get-Command oh-my-posh -ErrorAction SilentlyContinue).Source
 if (-not $omp) { $c = Join-Path $env:LOCALAPPDATA "Programs\oh-my-posh\bin\oh-my-posh.exe"; if (Test-Path $c) { $omp = $c } }
