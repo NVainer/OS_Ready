@@ -76,9 +76,11 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
         catch { Write-Host "[x] Elevation was cancelled or failed. Aborting." -ForegroundColor Red }
     }
     if ($launched) {
-        # The elevated session has taken over; close this original (unelevated) window.
+        # The elevated session has taken over. Exit THIS process cleanly (code 0) so the
+        # launching terminal closes the window/tab itself - Windows Terminal and the classic
+        # console both auto-close on a 0 exit, but keep the tab open on a forced kill.
         Start-Sleep -Milliseconds 750
-        Stop-Process -Id $PID
+        [Environment]::Exit(0)
     }
     return
 }
@@ -512,7 +514,17 @@ function Read-WTSettings {
 function Save-WTSettings {
     param([string]$Path, $Json)
     Copy-Item $Path "$Path.bak" -Force -ErrorAction SilentlyContinue
-    Write-TextFileNoBom -Path $Path -Content ($Json | ConvertTo-Json -Depth 32)
+    $content = $Json | ConvertTo-Json -Depth 32
+    # Windows Terminal may hold the file open; retry, and never leave it read-only.
+    for ($i = 1; $i -le 4; $i++) {
+        try {
+            $item = Get-Item $Path -ErrorAction SilentlyContinue
+            if ($item -and $item.IsReadOnly) { $item.IsReadOnly = $false }
+            Write-TextFileNoBom -Path $Path -Content $content
+            return
+        } catch { Start-Sleep -Milliseconds 400 }
+    }
+    Write-Log "Could not update Windows Terminal settings.json after retries." WARN
 }
 
 function Get-WTPwshProfile {
