@@ -72,8 +72,13 @@ if (-not $currentPrincipal.IsInRole([Security.Principal.WindowsBuiltInRole]::Adm
         }
     }
     if (-not $launched) {
-        try { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs }
+        try { Start-Process -FilePath 'powershell.exe' -Verb RunAs -ArgumentList $psArgs -ErrorAction Stop; $launched = $true }
         catch { Write-Host "[x] Elevation was cancelled or failed. Aborting." -ForegroundColor Red }
+    }
+    if ($launched) {
+        # The elevated session has taken over; close this original (unelevated) window.
+        Start-Sleep -Milliseconds 750
+        Stop-Process -Id $PID
     }
     return
 }
@@ -852,11 +857,18 @@ function Set-StartFolders {
 # --- 12. Remove the Widgets button (weather/news, taskbar left) ---------------
 function Disable-WidgetsButton {
     if (-not (Confirm-Action "Remove the Widgets (weather & news) button from the taskbar?")) { return }
-    # Written via reg.exe: on some builds the provider throws UnauthorizedAccess on this
-    # specific value, and reg.exe (a native process) both avoids that and leaves $Error clean.
-    reg.exe add 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' /v TaskbarDa /t REG_DWORD /d 0 /f > $null 2>&1
-    if ($LASTEXITCODE -eq 0) { Write-Log "Widgets button removed." OK }
-    else { Write-Log "Could not remove Widgets button (reg exit $LASTEXITCODE)." ERR }
+    # The HKCU TaskbarDa toggle is write-protected on Win11 (only Settings/Explorer may set
+    # it), so disable Widgets via the supported policy instead. Needs elevation (we are).
+    $errBefore = $global:Error.Count
+    try {
+        $pol = 'HKLM:\SOFTWARE\Policies\Microsoft\Dsh'
+        if (-not (Test-Path $pol)) { New-Item $pol -Force -ErrorAction Stop | Out-Null }
+        New-ItemProperty $pol 'AllowNewsAndInterests' -Value 0 -PropertyType DWord -Force -ErrorAction Stop | Out-Null
+        Write-Log "Widgets disabled via policy (effective after the Explorer restart)." OK
+    } catch {
+        Write-Log "Could not disable Widgets: $($_.Exception.Message)" WARN
+    }
+    while ($global:Error.Count -gt $errBefore) { $global:Error.RemoveAt(0) }  # keep the step clean
 }
 
 # --- 13. Clean the taskbar: Task View, Search, Chat, Copilot, app pins --------

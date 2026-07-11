@@ -54,7 +54,7 @@ harness — elevation, connectivity, environment probe, prompts, reporting — w
 9. **Turns off all startup apps** (reversible from Task Manager).
 10. **Windows (dark) theme** — applies the built-in dark theme (dark mode **and** the matching dark wallpaper).
 11. **Start folder pins** next to the power button (see note below).
-12. **Removes the Widgets** (weather & news) button from the taskbar.
+12. **Disables Widgets** (weather & news) via the supported policy — the button's own toggle is write-protected on Win11, so this may show as "managed by your organization".
 13. **Cleans the taskbar** — hides Task View, Search, Chat, Copilot and clears app pins (only Start remains).
 14. **Never** sleep / screen-off / hibernate (plugged in and on battery).
 15. **Turns off** Start/Explorer recommendations, recent files, Jump List items, and Start tips.
@@ -66,7 +66,7 @@ harness — elevation, connectivity, environment probe, prompts, reporting — w
 - Requires an internet connection and `winget` (App Installer, ships with Win 11).
 - A full log is written to `%USERPROFILE%\Power_Windows_<timestamp>.log`.
 - Steps 10-16 write per-user (HKCU) settings — run as the user whose desktop you're setting up. Explorer is restarted at the end to apply taskbar/Start changes.
-- **Elevation** opens the admin session as a **Windows Terminal tab** (in a dedicated `Power_Windows` window). Windows' security model keeps elevated tabs out of an unelevated window, so it's a separate elevated window that repeat runs share as tabs — not a tab inside your original window.
+- **Elevation** opens the admin session as a **Windows Terminal tab** (in a dedicated `Power_Windows` window) and closes the original window it was launched from. Windows' security model keeps elevated tabs out of an unelevated window, so it's a separate elevated window that repeat runs share as tabs — not a tab inside your original window.
 - Restart Windows Terminal (font/profile) and sign out/in or reboot (language) after it finishes.
 - **Office** is downloaded during the run and installed at the end (step 17): the image is mounted and `Setup.exe` is run **from the image root** (so it finds its `Office\` payload). It keeps waiting while Office is actively installing and gives up after **5 min with no progress** (or 40 min total), leaving the image mounted if it can't confirm completion.
 
