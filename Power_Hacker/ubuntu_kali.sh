@@ -224,9 +224,12 @@ setup_terminal() {
     local _pu
     _pu=$(gsettings get org.gnome.Ptyxis default-profile-uuid 2>/dev/null | tr -d "'")
     gsettings set org.gnome.Ptyxis interface-style 'dark' || true
+    # Bigger windows. restore-window-size=false so the defaults always win
+    # (Ptyxis otherwise reopens at the last window's size). This only affects
+    # NEW windows — Ptyxis/Wayland won't let a script resize the current one.
+    gsettings set org.gnome.Ptyxis restore-window-size false || true
     gsettings set org.gnome.Ptyxis default-columns 150 || true
     gsettings set org.gnome.Ptyxis default-rows    44  || true
-    gsettings set org.gnome.Ptyxis window-size "(uint32 150, uint32 44)" || true
     [[ -n "$_pu" ]] && gsettings set "org.gnome.Ptyxis.Profile:/org/gnome/Ptyxis/Profiles/$_pu/" palette 'linux' || true
   fi
 
