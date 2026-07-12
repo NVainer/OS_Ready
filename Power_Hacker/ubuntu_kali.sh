@@ -262,22 +262,6 @@ restore_terminal_on_error() {
   warn "Aborted (exit $rc). Terminal restored."
 }
 
-apply_endstate_terminal() {
-  command -v gsettings >/dev/null 2>&1 || return 0
-  # The zsh section installs MesloLGS NF; set it as the terminal font now (needed
-  # for Powerlevel10k glyphs). Skipped if it isn't present, so we never leave a
-  # broken/badly-spaced fallback font behind.
-  fc-list 2>/dev/null | grep -qi 'MesloLGS NF' || return 0
-  if gsettings list-schemas 2>/dev/null | grep -qx org.gnome.Ptyxis; then
-    gsettings set org.gnome.Ptyxis use-system-font false      || true
-    gsettings set org.gnome.Ptyxis font-name 'MesloLGS NF 12' || true
-  fi
-  if [[ -n "${PROFILE_PATH:-}" ]]; then
-    gsettings set "$PROFILE_PATH" use-system-font false || true
-    gsettings set "$PROFILE_PATH" font 'MesloLGS NF 12' || true
-  fi
-}
-
 # -----------------------------------------------------------------------------
 # Banner
 # -----------------------------------------------------------------------------
@@ -904,8 +888,6 @@ main() {
     printf '\n\n' >&3
     exec 1>&3 2>&4                 # restore the terminal for the closing screen
   fi
-
-  apply_endstate_terminal
 
   trap - EXIT INT TERM
   if [[ -n "$SUDO_KEEPALIVE_PID" ]]; then
