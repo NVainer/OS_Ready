@@ -1,0 +1,122 @@
+# Power_Ubuntu — Starship prompt
+#
+# Deliberately the same shape as the Powerlevel10k "lean" style this replaced:
+# single line, transparent background, no powerline separators, `❯` prompt char,
+# context on the left and status/timing on the right.
+#
+# Needs a Nerd Font for the glyphs — the `fonts` section installs MesloLGS NF.
+# Colours are 256-colour indices, matching the old p10k palette.
+
+"$schema" = 'https://starship.rs/config-schema.json'
+
+format = """
+$username\
+$hostname\
+$directory\
+$git_branch\
+$git_state\
+$git_status\
+$character"""
+
+right_format = """
+$status\
+$cmd_duration\
+$jobs\
+$python\
+$nodejs\
+$golang\
+$rust\
+$java\
+$docker_context"""
+
+add_newline = false
+# Ubuntu's archive build is fast, but a cold NFS mount shouldn't stall the shell.
+command_timeout = 1000
+
+[character]
+success_symbol = '[❯](bold 76)'
+error_symbol   = '[❯](bold 196)'
+vimcmd_symbol  = '[❮](bold 76)'
+
+[directory]
+style             = '31'
+truncation_length = 3
+truncate_to_repo  = true
+truncation_symbol = '…/'
+read_only         = ' 󰌾'
+read_only_style   = '196'
+format            = '[$path]($style)[$read_only]($read_only_style) '
+
+[git_branch]
+symbol = ' '
+style  = '76'
+format = '[$symbol$branch]($style) '
+
+# Yellow the moment the tree is dirty — same signal p10k gave.
+[git_status]
+style      = '178'
+format     = '([$all_status$ahead_behind]($style) )'
+conflicted = '~${count}'
+ahead      = '⇡${count}'
+behind     = '⇣${count}'
+diverged   = '⇕⇡${ahead_count}⇣${behind_count}'
+untracked  = '?${count}'
+stashed    = '*${count}'
+modified   = '!${count}'
+staged     = '+${count}'
+renamed    = '»${count}'
+deleted    = '✘${count}'
+
+[git_state]
+style = '178'
+
+[status]
+disabled = false
+style    = '160'
+symbol   = '✘'
+format   = '[$symbol$status]($style) '
+
+[cmd_duration]
+min_time = 2000
+style    = '101'
+format   = '[$duration]($style) '
+
+[jobs]
+style  = '70'
+symbol = '✦'
+
+# Only shown when it actually tells you something: a different user, or SSH.
+[username]
+show_always = false
+style_user  = '178'
+style_root  = 'bold 196'
+format      = '[$user]($style)@'
+
+[hostname]
+ssh_only = true
+style    = '178'
+format   = '[$hostname]($style) '
+
+[python]
+style  = '73'
+format = '[$symbol$version( \($virtualenv\))]($style) '
+
+[nodejs]
+style  = '70'
+format = '[$symbol$version]($style) '
+
+[golang]
+style  = '73'
+format = '[$symbol$version]($style) '
+
+[rust]
+style  = '166'
+format = '[$symbol$version]($style) '
+
+[java]
+style  = '166'
+format = '[$symbol$version]($style) '
+
+[docker_context]
+style  = '73'
+format = '[$symbol$context]($style) '
