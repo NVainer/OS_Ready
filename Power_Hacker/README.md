@@ -1,4 +1,3 @@
-
 # 🐧 Ubuntu → 🐉 Kali (on Wayland...)
 ### Install essential packages, configure security, and customize your desktop in minutes
 
@@ -10,17 +9,53 @@
 
 # one liner
 
-Ubuntu 26.04 ships `wget` (but not `curl`), so:
+Ubuntu 26.04 ships `wget` but **not** `curl`, so:
 
 ```bash
-wget https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
+bash <(wget -qO- https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh)
+```
+
+Process substitution keeps **stdin attached to your terminal**, so the interactive
+prompts still work — a plain `wget -qO- ... | bash` pipe would eat them and
+silently answer nothing. It also leaves no `ubuntu_kali.sh` lying around afterwards.
+
+Unattended, no questions asked:
+
+```bash
+bash <(wget -qO- https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh) --full
 ```
 
 Prefer `curl`? Install it first with `sudo apt install -y curl`:
 
 ```bash
-curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh && chmod +x ubuntu_kali.sh && ./ubuntu_kali.sh
+bash <(curl -fsSL https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/ubuntu_kali.sh)
 ```
+
+<br>
+
+## 📦 What you get
+
+| Section | What it does |
+|---------|--------------|
+| `essentials` | git, wget/curl, flatpak + Flathub, codecs, fonts EULA, GNOME tweaks tools |
+| `cli` | eza, zoxide, fzf, atuin, bat, ripgrep, fd, lazygit, gh, delta, btop, fastfetch, neovim… |
+| `fonts` | JetBrains Mono, Fira Code, Cascadia Code, MesloLGS NF (Nerd Font) |
+| `dev` | Docker, Podman + Distrobox, KVM/QEMU + virt-manager, Go, VS Code, Sublime Text |
+| `security` | AppArmor utils, KeePassXC, gufw (firewall **not** auto-enabled — see notes) |
+| `pro` | Ubuntu Pro — free ESM (10 yrs of universe security fixes) + Livepatch |
+| `firefox` | apt/PPA Firefox (not snap) + FoxyProxy via enterprise policy |
+| `brave` | Brave via its official repo |
+| `gnome` | dark mode, dock at bottom, Do Not Disturb, sane Nautilus sorting |
+| `theme` | purple **accent colour** (the native GNOME 47+ one, not a GTK theme hack) |
+| `hebrew` | Hebrew (IL) layout with Alt+Shift toggle |
+| `extensions` | system-monitor, apps-menu, places-menu, workspaces + VPN settings shortcut |
+| `zsh` | ZSH + Oh-My-Zsh + **Starship** prompt, autosuggestions, syntax highlighting |
+| `pentest` | nmap, wireshark, sqlmap, hydra, ffuf, radare2, searchsploit, ProjectDiscovery, nxc… |
+| `metasploit` | Metasploit Framework (omnibus installer) |
+| `burp` | Burp Suite Community |
+| `wordlists` | SecLists + rockyou |
+| `payloads` | PayloadsAllTheThings + php-reverse-shell |
+| `ssh` | disable or harden sshd — only if an SSH server is actually installed |
 
 <br>
 
@@ -31,13 +66,14 @@ curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/
 | Flag | Effect |
 |------|--------|
 | `--full` | install everything, skip prompts |
+| `--yes` / `-y` | accept all y/n prompts |
 | `--only=A,B,C` | run only these sections |
-| `--skip=A,B,C` | run all sections except these |
+| `--skip=A,B,C` | run all sections except these (can't combine with `--only`) |
 | `--dry-run` | show what would run, change nothing |
 | `--list-sections` | list every section |
 | `--help` | full help |
 
-**Sections:** `essentials dev security firefox brave gnome theme hebrew extensions zsh pentest metasploit burp wordlists payloads ssh`
+**Sections:** `essentials cli fonts dev security pro firefox brave gnome theme hebrew extensions zsh pentest metasploit burp wordlists payloads ssh`
 
 ## ✅ Requirements & notes
 
@@ -45,7 +81,39 @@ curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/
 - Run as your **normal user** — it calls `sudo` when needed
 - The firewall is **not** auto-enabled on this profile (it would block your own listeners / reverse shells)
 - Go and pipx tools land in `~/.local/bin` — **log out and back in** after setup so group memberships and PATH take effect
+- `msfdb init` is **not** run automatically (it's interactive) — run it after your first login
 - On a brand-new release, some third-party repos (Docker, Mozilla PPA) may lag; those sections are skipped with a warning and the rest still run
+
+> Use this only on systems you own or are explicitly authorised to test.
+
+## ↩️ Changed your mind?
+
+apt 3.x (Ubuntu 25.10+) can roll back the package changes:
+
+```bash
+sudo apt history-list
+```
+
+```bash
+sudo apt history-undo <id>
+```
+
+Your previous `~/.zshrc` is backed up next to it as `~/.zshrc.bak.<timestamp>`.
+
+## 🧬 Notes for Ubuntu 26.04
+
+- **sudo is `sudo-rs`**, not GNU sudo. `-E` / bare `--preserve-env` are gone —
+  only `--preserve-env=LIST` works. This script passes variables inline instead.
+- **Core utilities are `rust-coreutils`**; `cp`, `mv` and `rm` are still GNU.
+- **Wayland only** — GNOME 50 dropped the Xorg session entirely.
+- **Ptyxis** is the default terminal; GNOME Terminal and its settings schema are
+  gone, so terminal theming targets Ptyxis and the dock pins `org.gnome.Ptyxis`.
+  Window size is set in *cells* (`default-columns` / `default-rows`) because
+  Wayland ignores pixel geometry.
+- **`gnome-shell-extensions` is now an empty transitional metapackage** — the
+  `extensions` section installs the four individual extension packages it needs.
+- Third-party repos are registered in **deb822 `.sources`** format, matching
+  Ubuntu's own `/etc/apt/sources.list.d/ubuntu.sources`.
 
 <br><br>
 
@@ -55,4 +123,3 @@ curl -L -O https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_Hacker/
 3️⃣ Hit **ENTER** and let the magic happen
 
 <img width="800" height="380" alt="Screenshot 2025-08-11 121333" src="https://github.com/user-attachments/assets/2458b811-daab-401c-8840-5a9df0022b18" />
- 
