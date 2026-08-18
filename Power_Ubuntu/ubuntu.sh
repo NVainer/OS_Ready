@@ -496,22 +496,38 @@ section_fonts() {
 dev_step() {
   local label=$1; shift
   set +e; ( set -e; "$@" ); local rc=$?; set -e
-  if (( rc != 0 )); then warn "Dev: ${label} step failed (exit $rc); continuing."; fi
+  if (( rc != 0 )); then
+    warn "Dev: ${label} step failed (exit $rc); continuing."
+    # In pinned-UI mode warn() only reaches the log — surface it on screen too.
+    if $UI; then
+      printf '\r\e[K  %b[!] dev: %s failed (see log)%b\n' "$YELLOW" "$label" "$NC" >&3 2>/dev/null || true
+    fi
+    DEV_FAILED=1   # dynamic scope: sets section_dev's local, read back below
+  fi
+  return 0
 }
 
 section_dev() {
   ask_yes "Install Dev stack (Docker, Podman/Distrobox, KVM/QEMU + virt-manager)?" || return 0
+  local DEV_FAILED=0
   dev_step "Docker"            _dev_docker
   dev_step "Podman/Distrobox"  _dev_containers
   dev_step "KVM/virt-manager"  _dev_virt
+  # Report a failed step upward so 'dev' lands in the closing summary rather
+  # than being visible only to whoever reads the log.
+  (( DEV_FAILED == 0 ))
 }
 
 _dev_docker() {
   log "Installing Docker..."
 
   local codename
-  # shellcheck source=/dev/null  # os-release defines its own VERSION; subshell keeps it contained
-  codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+  # /etc/os-release sets VERSION, a name this script has already frozen with
+  # `readonly` — and readonly attributes are INHERITED by subshells, so sourcing
+  # it inside $( ) died with "VERSION: readonly variable" and took the whole
+  # Docker step with it. A separate bash process starts with a clean slate.
+  # shellcheck disable=SC2016
+  codename=$(bash -c '. /etc/os-release; echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}"')
   # Docker's repo is codename-pinned. It has published for 26.04 ('resolute'),
   # but a brand-new release can lag for weeks — fall back to the newest LTS it
   # does support so Docker still installs (packages are codename-agnostic in
@@ -687,6 +703,7 @@ section_theme() {
 
 section_hebrew() {
   ask_yes 'Add Hebrew (IL) keyboard layout with Alt+Shift toggle?' || return 0
+  log "Adding the Hebrew (IL) layout (Alt+Shift switches)..."
   gsettings set org.gnome.desktop.input-sources xkb-options \
     "['grp:alt_shift_toggle', 'lv3:ralt_switch']" || true
   gsettings set org.gnome.desktop.input-sources sources \
@@ -721,7 +738,12 @@ section_zsh() {
 
   # The prompt needs patched glyphs. Normally the `fonts` section has already
   # installed them; catch the --only=zsh case so the prompt isn't full of tofu.
-  if ! fc-list 2>/dev/null | grep -qi 'MesloLGS NF'; then
+  # Don't pipe fc-list into `grep -q`: under `pipefail` grep exits at the first
+  # match and SIGPIPEs fc-list, so the pipeline returns 141 and this guard never
+  # fires (the same trap the keyring probe in add_apt_source works around).
+  local installed_fonts
+  installed_fonts=$(fc-list 2>/dev/null || true)
+  if [[ "$installed_fonts" != *'MesloLGS NF'* ]]; then
     log "Installing MesloLGS NF (needed for the prompt glyphs)..."
     install_meslo_nf
   fi
