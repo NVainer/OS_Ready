@@ -11,8 +11,9 @@
 #   ./ubuntu_kali.sh --dry-run     show what would run, then exit
 #   ./ubuntu_kali.sh --help
 #
-# Sections: essentials cli fonts dev security pro firefox brave gnome theme
-#           hebrew extensions zsh pentest metasploit burp wordlists payloads ssh
+# Sections: essentials cli fonts dev security pro firefox brave claude gnome
+#           theme hebrew extensions zsh pentest metasploit burp wordlists
+#           payloads ssh
 #
 # Target: Ubuntu 26.04 LTS "Resolute Raccoon" (GNOME 50, Wayland-only, apt 3.x,
 # rust-coreutils + sudo-rs by default). Older LTS releases still work — sections
@@ -41,7 +42,7 @@ readonly VERSION='2.0.0'
 # the usage text, and --list-sections. `fonts` runs before `zsh` so the prompt
 # has its Nerd Font glyphs the first time a shell opens.
 SECTIONS=(
-  essentials cli fonts dev security pro firefox brave
+  essentials cli fonts dev security pro firefox brave claude
   gnome theme hebrew extensions
   zsh
   pentest metasploit burp wordlists payloads
@@ -409,6 +410,14 @@ msttcorefonts msttcorefonts/accepted-mscorefonts-eula select true
 ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true
 EOF
 
+  # Bring the base system fully up to date before layering anything on top of
+  # it. full-upgrade, not upgrade: on a freshly released Ubuntu the pending set
+  # routinely includes packages that can only advance if something is removed,
+  # and plain `upgrade` holds those back forever. Spelled `apt-get` because
+  # `apt` prints "does not have a stable CLI interface" when run from a script.
+  log "Applying pending system updates (full-upgrade)..."
+  sudo DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y -q
+
   log "Installing essentials..."
   apt_install \
     git curl ca-certificates wget unzip \
@@ -416,6 +425,15 @@ EOF
     ubuntu-restricted-extras \
     gnome-tweaks gnome-shell-extension-manager \
     yaru-theme-gtk yaru-theme-icon
+
+  # Toolchain and kernel headers, so anything that builds a module through DKMS
+  # (VirtualBox guest additions, out-of-tree Wi-Fi and GPU drivers) has what it
+  # needs. linux-headers-generic rides along because the full-upgrade above may
+  # have staged a newer kernel: until the reboot `uname -r` still names the old
+  # one, and the metapackage is what keeps headers tracking the kernel you will
+  # actually boot into.
+  log "Installing the build toolchain and kernel headers..."
+  install_available build-essential dkms "linux-headers-$(uname -r)" linux-headers-generic
 
   # apt 3.x ships a converter for the legacy one-line sources format. Ubuntu's
   # own sources are already deb822; this cleans up any third-party .list files
@@ -684,6 +702,26 @@ section_brave() {
   apt_update
   apt_install brave-browser
   pin_to_favorites brave-browser.desktop
+}
+
+# Claude Desktop, from Anthropic's own APT repo. Anthropic documents the legacy
+# one-line `.list` form; this registers the identical repo in deb822, the way
+# every other third-party source here is registered — and add_apt_source's
+# cleanup removes a claude-desktop.list left behind by a manual install.
+section_claude() {
+  ask_yes 'Install Claude Desktop (official Anthropic APT repo)?' || return 0
+
+  log "Installing Claude Desktop (official APT repo)..."
+  add_apt_source claude-desktop \
+    'https://downloads.claude.ai/claude-desktop/key.asc' \
+    'https://downloads.claude.ai/claude-desktop/apt/stable' \
+    'stable' \
+    'main' \
+    'amd64 arm64'
+  apt_update
+  apt_install claude-desktop
+
+  pin_to_favorites com.anthropic.Claude.desktop
 }
 
 section_gnome() {

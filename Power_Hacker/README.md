@@ -37,7 +37,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_
 
 | Section | What it does |
 |---------|--------------|
-| `essentials` | git, wget/curl, flatpak + Flathub, codecs, fonts EULA, GNOME tweaks tools |
+| `essentials` | full system upgrade, git, wget/curl, flatpak + Flathub, codecs, fonts EULA, GNOME tweaks tools, build toolchain (build-essential, dkms, kernel headers) |
 | `cli` | eza, zoxide, fzf, atuin, bat, ripgrep, fd, lazygit, gh, delta, btop, fastfetch, neovim… |
 | `fonts` | JetBrains Mono, Fira Code, Cascadia Code, MesloLGS NF (Nerd Font) |
 | `dev` | Docker, Podman + Distrobox, KVM/QEMU + virt-manager, Go, VS Code, Sublime Text |
@@ -45,6 +45,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_
 | `pro` | Ubuntu Pro — free ESM (10 yrs of universe security fixes) + Livepatch |
 | `firefox` | apt/PPA Firefox (not snap) + FoxyProxy via enterprise policy |
 | `brave` | Brave via its official repo |
+| `claude` | Claude Desktop via Anthropic's official APT repo |
 | `gnome` | dark mode, dock at bottom, Do Not Disturb, sane Nautilus sorting |
 | `theme` | purple **accent colour** (the native GNOME 47+ one, not a GTK theme hack) |
 | `hebrew` | Hebrew (IL) layout with Alt+Shift toggle |
@@ -73,7 +74,7 @@ bash <(curl -fsSL https://raw.githubusercontent.com/NVainer/OS_Ready/main/Power_
 | `--list-sections` | list every section |
 | `--help` | full help |
 
-**Sections:** `essentials cli fonts dev security pro firefox brave gnome theme hebrew extensions zsh pentest metasploit burp wordlists payloads ssh`
+**Sections:** `essentials cli fonts dev security pro firefox brave claude gnome theme hebrew extensions zsh pentest metasploit burp wordlists payloads ssh`
 
 ## ✅ Requirements & notes
 
