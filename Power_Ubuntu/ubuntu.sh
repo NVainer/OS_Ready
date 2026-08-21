@@ -428,6 +428,14 @@ EOF
   # routinely includes packages that can only advance if something is removed,
   # and plain `upgrade` holds those back forever. Spelled `apt-get` because
   # `apt` prints "does not have a stable CLI interface" when run from a script.
+  #
+  # Phased updates are deliberately left where they are: apt defers a package
+  # until this machine's cohort falls inside its Phased-Update-Percentage, and
+  # full-upgrade honours that exactly like plain upgrade does. So finishing the
+  # run with a handful of "not upgraded" is normal rather than a failure — they
+  # arrive on a later run, once the rollout widens. Forcing them with
+  # APT::Get::Always-Include-Phased-Updates would opt every user of this script
+  # out of the staged rollout that exists to catch regressions; not our call.
   log "Applying pending system updates (full-upgrade)..."
   sudo DEBIAN_FRONTEND=noninteractive apt-get full-upgrade -y -q
 
