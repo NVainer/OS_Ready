@@ -925,9 +925,14 @@ zstyle ':completion:*' matcher-list 'm:{a-z}={A-Z}'
 # Modern CLI wiring — each guarded, so a tool you didn't install stays silent.
 command -v starship >/dev/null && eval "$(starship init zsh)"
 command -v zoxide   >/dev/null && eval "$(zoxide init zsh)"          # z <dir>
-command -v atuin    >/dev/null && eval "$(atuin init zsh --disable-up-arrow)"
+# fzf before atuin, and the order matters: both bind Ctrl-R and the one loaded
+# last wins. fzf's history widget only greps ~/.zsh_history, while atuin searches
+# its own database (dedup, timestamps, per-directory), so atuin takes Ctrl-R and
+# fzf keeps Ctrl-T (files) and Alt-C (cd), which nothing else contests.
 [[ -r /usr/share/doc/fzf/examples/key-bindings.zsh ]] && source /usr/share/doc/fzf/examples/key-bindings.zsh
 [[ -r /usr/share/doc/fzf/examples/completion.zsh   ]] && source /usr/share/doc/fzf/examples/completion.zsh
+# --disable-up-arrow leaves the arrow keys on plain zsh history.
+command -v atuin    >/dev/null && eval "$(atuin init zsh --disable-up-arrow)"
 
 if command -v eza >/dev/null; then
   alias ls='eza --group-directories-first'
